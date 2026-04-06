@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
 #  mtproxy — Telegram MTProxy Manager с Fake TLS
-#  Версия: 2.0
+#  Версия: 3.0
+#  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
 
 BINARY_PATH="/usr/local/bin/mtproxy"
@@ -9,15 +10,19 @@ BACKUP_DIR="/etc/mtproxy/backups"
 LOG_FILE="/var/log/mtproxy.log"
 CONFIG_DIR="/etc/mtproxy"
 CONFIG_FILE="$CONFIG_DIR/proxies.conf"
+EXPORT_FILE="$CONFIG_DIR/export_links.txt"
+CRON_TAG="# mtproxy-auto"
+GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
+VERSION="3.0"
 
 # --- ЦВЕТА ---
-R='\033[0;31m'   # red
-G='\033[0;32m'   # green
-C='\033[0;36m'   # cyan
-Y='\033[1;33m'   # yellow
-M='\033[0;35m'   # magenta
-B='\033[0;34m'   # blue
-W='\033[1;37m'   # white
+R='\033[0;31m'
+G='\033[0;32m'
+C='\033[0;36m'
+Y='\033[1;33m'
+M='\033[0;35m'
+B='\033[0;34m'
+W='\033[1;37m'
 DIM='\033[2m'
 NC='\033[0m'
 
@@ -42,7 +47,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║          MTProxy Manager v2.0  (Fake TLS)           ║
+  ║        MTProxy Manager v3.0  (Fake TLS)             ║
   ╚══════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
@@ -79,7 +84,6 @@ pkg_install() {
 install_deps() {
     info "Проверка зависимостей..."
 
-    # Docker
     if ! command -v docker &>/dev/null; then
         info "Установка Docker..."
         curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
@@ -87,25 +91,23 @@ install_deps() {
         success "Docker установлен."
     fi
 
-    # qrencode
     if ! command -v qrencode &>/dev/null; then
         info "Установка qrencode..."
-        if [[ $PKG_MANAGER == "apt" ]]; then
-            apt-get update -qq >/dev/null 2>&1
-        fi
+        [[ $PKG_MANAGER == "apt" ]] && apt-get update -qq >/dev/null 2>&1
         pkg_install qrencode
     fi
 
-    # jq (для удобного парсинга docker inspect)
     if ! command -v jq &>/dev/null; then
         pkg_install jq
     fi
 
-    # Создаём директории и файлы
+    if ! command -v curl &>/dev/null; then
+        pkg_install curl
+    fi
+
     mkdir -p "$CONFIG_DIR" "$BACKUP_DIR"
     touch "$CONFIG_FILE" "$LOG_FILE"
 
-    # Устанавливаем себя как команду
     if [[ ! -f "$BINARY_PATH" || "$(realpath "$0")" != "$BINARY_PATH" ]]; then
         cp "$0" "$BINARY_PATH"
         chmod +x "$BINARY_PATH"
@@ -133,38 +135,25 @@ port_in_use() {
 
 # ─── ДОМЕНЫ ─────────────────────────────────────────────────
 
-# Домены разбиты по категориям для удобного выбора
 declare -A DOMAIN_CATEGORIES
-DOMAIN_CATEGORIES["🌍 Международные (Tech)"]="google.com cloudflare.com microsoft.com apple.com amazon.com github.com stackoverflow.com gitlab.com"
-DOMAIN_CATEGORIES["🌍 Международные (СМИ)"]="wikipedia.org bbc.com cnn.com reuters.com nytimes.com theguardian.com bloomberg.com forbes.com"
-DOMAIN_CATEGORIES["🌍 Международные (Развлечения)"]="netflix.com twitch.tv discord.com zoom.us spotify.com reddit.com medium.com tumblr.com"
-DOMAIN_CATEGORIES["🌍 Международные (Образование)"]="coursera.org udemy.com khanacademy.org edx.org duolingo.com ted.com skillshare.com"
-DOMAIN_CATEGORIES["🇷🇺 Российские (СМИ)"]="lenta.ru rbc.ru ria.ru kommersant.ru vedomosti.ru iz.ru novayagazeta.ru meduza.io"
-DOMAIN_CATEGORIES["🇷🇺 Российские (Tech/IT)"]="habr.com mail.ru yandex.ru vk.com 2ch.hk pikabu.ru 4pda.to 3dnews.ru"
-DOMAIN_CATEGORIES["🇷🇺 Российские (Образование)"]="stepik.org geekbrains.ru skillbox.ru hexlet.io netology.ru skillFactory.ru"
-DOMAIN_CATEGORIES["🇷🇺 Российские (Сервисы)"]="gosuslugi.ru sberbank.ru tinkoff.ru avito.ru ozon.ru wildberries.ru kinopoisk.ru ivi.ru"
+DOMAIN_CATEGORIES["1:🌍 Международные (Tech)"]="google.com cloudflare.com microsoft.com apple.com amazon.com github.com stackoverflow.com gitlab.com"
+DOMAIN_CATEGORIES["2:🌍 Международные (СМИ)"]="wikipedia.org bbc.com cnn.com reuters.com nytimes.com theguardian.com bloomberg.com forbes.com"
+DOMAIN_CATEGORIES["3:🌍 Международные (Развлечения)"]="netflix.com twitch.tv discord.com zoom.us spotify.com reddit.com medium.com tumblr.com"
+DOMAIN_CATEGORIES["4:🌍 Международные (Образование)"]="coursera.org udemy.com khanacademy.org edx.org duolingo.com ted.com skillshare.com"
+DOMAIN_CATEGORIES["5:🇷🇺 Российские (СМИ)"]="lenta.ru rbc.ru ria.ru kommersant.ru vedomosti.ru iz.ru novayagazeta.ru meduza.io"
+DOMAIN_CATEGORIES["6:🇷🇺 Российские (Tech/IT)"]="habr.com mail.ru yandex.ru vk.com 2ch.hk pikabu.ru 4pda.to 3dnews.ru"
+DOMAIN_CATEGORIES["7:🇷🇺 Российские (Образование)"]="stepik.org geekbrains.ru skillbox.ru hexlet.io netology.ru skillfactory.ru"
+DOMAIN_CATEGORIES["8:🇷🇺 Российские (Сервисы)"]="gosuslugi.ru sberbank.ru tinkoff.ru avito.ru ozon.ru wildberries.ru kinopoisk.ru ivi.ru"
 
-# Плоский массив для нумерации
 DOMAINS=()
-DOMAIN_LABELS=()
 
 _build_domain_list() {
-    local order=(
-        "🌍 Международные (Tech)"
-        "🌍 Международные (СМИ)"
-        "🌍 Международные (Развлечения)"
-        "🌍 Международные (Образование)"
-        "🇷🇺 Российские (СМИ)"
-        "🇷🇺 Российские (Tech/IT)"
-        "🇷🇺 Российские (Образование)"
-        "🇷🇺 Российские (Сервисы)"
-    )
     DOMAINS=()
-    DOMAIN_LABELS=()
-    for cat in "${order[@]}"; do
-        for d in ${DOMAIN_CATEGORIES["$cat"]}; do
+    local keys
+    keys=$(echo "${!DOMAIN_CATEGORIES[@]}" | tr ' ' '\n' | sort)
+    for key in $keys; do
+        for d in ${DOMAIN_CATEGORIES[$key]}; do
             DOMAINS+=("$d")
-            DOMAIN_LABELS+=("$cat")
         done
     done
 }
@@ -172,23 +161,16 @@ _build_domain_list() {
 choose_domain() {
     _build_domain_list
 
-    local order=(
-        "🌍 Международные (Tech)"
-        "🌍 Международные (СМИ)"
-        "🌍 Международные (Развлечения)"
-        "🌍 Международные (Образование)"
-        "🇷🇺 Российские (СМИ)"
-        "🇷🇺 Российские (Tech/IT)"
-        "🇷🇺 Российские (Образование)"
-        "🇷🇺 Российские (Сервисы)"
-    )
+    local keys
+    keys=$(echo "${!DOMAIN_CATEGORIES[@]}" | tr ' ' '\n' | sort)
 
     echo -e "\n${C}Выберите домен для Fake TLS маскировки:${NC}\n"
 
     local idx=0
-    for cat in "${order[@]}"; do
-        echo -e "${W}── ${cat} ──${NC}"
-        for d in ${DOMAIN_CATEGORIES["$cat"]}; do
+    for key in $keys; do
+        local label="${key#*:}"
+        echo -e "${W}── ${label} ──${NC}"
+        for d in ${DOMAIN_CATEGORIES[$key]}; do
             idx=$((idx+1))
             printf "  ${Y}%3d)${NC} %-25s" "$idx" "$d"
             [[ $((idx % 3)) -eq 0 ]] && echo ""
@@ -280,12 +262,13 @@ menu_add() {
             -i prefer-ipv4 \
             0.0.0.0:"$CHOSEN_PORT" "$SECRET" >/dev/null 2>&1
 
-    local EXIT_CODE=$?
-    if [[ $EXIT_CODE -ne 0 ]]; then
-        die "Контейнер не запустился (exit $EXIT_CODE)."
+    if [[ $? -ne 0 ]]; then
+        die "Контейнер не запустился."
     fi
 
-    # Сохраняем конфиг
+    # Firewall — автооткрытие порта
+    _firewall_open "$CHOSEN_PORT"
+
     echo "$CONTAINER_NAME|$CLIENT_ID|$CHOSEN_PORT|$SECRET|$CHOSEN_DOMAIN|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG_FILE"
     log "Создан прокси: $CONTAINER_NAME, порт=$CHOSEN_PORT, домен=$CHOSEN_DOMAIN"
 
@@ -303,13 +286,82 @@ menu_add() {
     echo -e "  ${C}IP:${NC}      $IP"
     echo -e "  ${C}Порт:${NC}    $CHOSEN_PORT"
     echo -e "  ${C}Secret:${NC}  $SECRET"
-    echo -e "\n  ${B}tg:// ссылка:${NC}"
-    echo -e "  $LINK"
-    echo -e "\n  ${B}HTTPS ссылка:${NC}"
-    echo -e "  $HTTPS_LINK"
+    echo -e "\n  ${B}tg:// ссылка:${NC}\n  $LINK"
+    echo -e "\n  ${B}HTTPS ссылка:${NC}\n  $HTTPS_LINK"
     echo -e "\n  ${Y}QR-код (tg://):${NC}"
     qrencode -t ANSIUTF8 "$LINK"
 
+    pause
+}
+
+# ─── FIREWALL ПОМОЩНИК ──────────────────────────────────────
+
+_firewall_open() {
+    local port="$1"
+    if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+        ufw allow "$port"/tcp >/dev/null 2>&1
+        success "UFW: порт $port открыт."
+        log "UFW: открыт порт $port"
+    elif command -v firewall-cmd &>/dev/null; then
+        firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1
+        firewall-cmd --reload >/dev/null 2>&1
+        success "firewalld: порт $port открыт."
+        log "firewalld: открыт порт $port"
+    elif command -v iptables &>/dev/null; then
+        iptables -I INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+        success "iptables: порт $port открыт."
+        log "iptables: открыт порт $port"
+    fi
+}
+
+_firewall_close() {
+    local port="$1"
+    if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+        ufw delete allow "$port"/tcp >/dev/null 2>&1
+        log "UFW: закрыт порт $port"
+    elif command -v firewall-cmd &>/dev/null; then
+        firewall-cmd --permanent --remove-port="$port"/tcp >/dev/null 2>&1
+        firewall-cmd --reload >/dev/null 2>&1
+        log "firewalld: закрыт порт $port"
+    elif command -v iptables &>/dev/null; then
+        iptables -D INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+        log "iptables: закрыт порт $port"
+    fi
+}
+
+firewall_menu() {
+    banner
+    echo -e "${C}═══ FIREWALL УПРАВЛЕНИЕ ═══${NC}\n"
+
+    mapfile -t containers < <(docker ps -a --format "{{.Names}}" | grep "^mtproto-")
+    if [[ ${#containers[@]} -eq 0 ]]; then
+        warn "Прокси не найдены."; pause; return
+    fi
+
+    echo -e "  1) Открыть порт прокси в firewall"
+    echo -e "  2) Закрыть порт прокси в firewall"
+    echo -e "  3) Показать статус firewall\n"
+    read -rp "Выбор: " fc
+
+    case $fc in
+        1|2)
+            for i in "${!containers[@]}"; do
+                echo -e "  ${Y}$((i+1)))${NC} ${containers[$i]}"
+            done
+            read -rp "Номер: " IDX
+            local CONTAINER="${containers[$((IDX-1))]}"
+            local PORT
+            PORT=$(docker inspect "$CONTAINER" \
+                --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+            [[ $fc -eq 1 ]] && _firewall_open "$PORT" || _firewall_close "$PORT"
+            ;;
+        3)
+            if command -v ufw &>/dev/null; then ufw status numbered
+            elif command -v firewall-cmd &>/dev/null; then firewall-cmd --list-all
+            else iptables -L INPUT -n --line-numbers
+            fi
+            ;;
+    esac
     pause
 }
 
@@ -345,10 +397,8 @@ show_list() {
         SECRET=$(echo "$CMD" | awk '{print $NF}')
 
         local DOMAIN="—"
-        # Читаем домен из нашего конфига
-        if grep -q "^$CONTAINER|" "$CONFIG_FILE" 2>/dev/null; then
+        grep -q "^$CONTAINER|" "$CONFIG_FILE" 2>/dev/null && \
             DOMAIN=$(grep "^$CONTAINER|" "$CONFIG_FILE" | cut -d'|' -f5)
-        fi
 
         local CREATED
         CREATED=$(docker inspect --format='{{.Created}}' "$CONTAINER" 2>/dev/null | cut -dT -f1)
@@ -359,8 +409,7 @@ show_list() {
         echo -e "${W}│${NC}  Домен: ${C}$DOMAIN${NC}  |  IP: $IP  |  Порт: ${Y}$PORT${NC}"
         echo -e "${W}│${NC}  Secret: ${DIM}$SECRET${NC}"
         echo -e "${W}│${NC}  Link:   ${B}$LINK${NC}"
-        echo -e "${W}└──────────────────────────────────────────${NC}"
-        echo ""
+        echo -e "${W}└──────────────────────────────────────────${NC}\n"
     done
 
     pause
@@ -370,10 +419,9 @@ show_list() {
 
 show_detail() {
     banner
-    echo -e "${C}Введите ID клиента (или часть имени контейнера):${NC}"
-    read -rp "> " CLIENT_ID
-
+    read -rp "ID клиента: " CLIENT_ID
     local CONTAINER="mtproto-$CLIENT_ID"
+
     if ! docker ps -a --format "{{.Names}}" | grep -q "^$CONTAINER$"; then
         warn "Контейнер '$CONTAINER' не найден."
         pause; return
@@ -402,12 +450,10 @@ show_detail() {
     echo -e "${W}Secret:${NC}     $SECRET"
     echo -e "\n${B}tg://  ${NC} $LINK"
     echo -e "${B}HTTPS  ${NC} $HTTPS_LINK"
-
     echo -e "\n${Y}QR (tg://):${NC}"
     qrencode -t ANSIUTF8 "$LINK"
     echo -e "\n${Y}QR (HTTPS):${NC}"
     qrencode -t ANSIUTF8 "$HTTPS_LINK"
-
     echo -e "\n${C}--- Логи (последние 30 строк) ---${NC}"
     docker logs --tail=30 "$CONTAINER" 2>&1
 
@@ -419,9 +465,8 @@ show_detail() {
 rotate_secret() {
     banner
     echo -e "${Y}═══ ОБНОВЛЕНИЕ СЕКРЕТА ═══${NC}"
-    warn "Все текущие соединения будут разорваны. Клиентам нужно будет переподключиться."
+    warn "Все текущие соединения будут разорваны."
     echo ""
-
     read -rp "ID клиента: " CLIENT_ID
     local CONTAINER="mtproto-$CLIENT_ID"
 
@@ -434,8 +479,6 @@ rotate_secret() {
         --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}')
     DOMAIN=$(grep "^$CONTAINER|" "$CONFIG_FILE" 2>/dev/null | cut -d'|' -f5 || echo "google.com")
 
-    # Бэкап старой строки
-    mkdir -p "$BACKUP_DIR"
     local BFILE="$BACKUP_DIR/${CONTAINER}_$(date +%Y%m%d_%H%M%S).bak"
     grep "^$CONTAINER|" "$CONFIG_FILE" > "$BFILE" 2>/dev/null
     success "Резервная копия: $BFILE"
@@ -444,7 +487,6 @@ rotate_secret() {
     local NEW_SECRET
     NEW_SECRET=$(docker run --rm nineseconds/mtg:2 generate-secret --hex "$DOMAIN" 2>/dev/null)
 
-    info "Пересоздание контейнера..."
     docker stop "$CONTAINER" >/dev/null 2>&1
     docker rm "$CONTAINER" >/dev/null 2>&1
 
@@ -457,7 +499,6 @@ rotate_secret() {
         nineseconds/mtg:2 \
         simple-run -n 1.1.1.1 -i prefer-ipv4 0.0.0.0:"$PORT" "$NEW_SECRET" >/dev/null 2>&1
 
-    # Обновляем конфиг
     sed -i "/^$CONTAINER|/d" "$CONFIG_FILE"
     echo "$CONTAINER|$CLIENT_ID|$PORT|$NEW_SECRET|$DOMAIN|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG_FILE"
     log "Секрет обновлён: $CONTAINER"
@@ -482,10 +523,44 @@ show_status() {
     docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}\t{{.Image}}" \
         | grep -E "NAMES|mtproto-"
     echo ""
+    echo -e "${C}═══ СТАТИСТИКА ПОДКЛЮЧЕНИЙ ═══${NC}\n"
+    _show_connections
+    echo ""
     echo -e "${C}═══ СЕТЕВОЙ ТРАФИК ═══${NC}\n"
     docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" \
         | grep -E "NAME|mtproto-"
     pause
+}
+
+# ─── СТАТИСТИКА ПОДКЛЮЧЕНИЙ (mtg metrics) ───────────────────
+
+_show_connections() {
+    mapfile -t containers < <(docker ps --format "{{.Names}}" | grep "^mtproto-")
+    if [[ ${#containers[@]} -eq 0 ]]; then
+        echo -e "  ${DIM}Нет активных прокси.${NC}"
+        return
+    fi
+
+    for CONTAINER in "${containers[@]}"; do
+        local PORT
+        PORT=$(docker inspect "$CONTAINER" \
+            --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+
+        # mtg отдаёт метрики на порту 3129 (если включён)
+        local METRICS_PORT=$((PORT + 100))
+        local CONNS
+        CONNS=$(curl -s --max-time 2 "http://127.0.0.1:$METRICS_PORT/metrics" 2>/dev/null \
+            | grep "mtg_connections_total" | awk '{print $2}' | head -1)
+
+        if [[ -n "$CONNS" ]]; then
+            echo -e "  ${W}$CONTAINER${NC}: ${G}$CONNS${NC} соединений всего"
+        else
+            # Fallback — считаем через ss
+            local ACTIVE
+            ACTIVE=$(ss -tn | grep ":$PORT " | grep ESTAB | wc -l)
+            echo -e "  ${W}$CONTAINER${NC}: ${G}$ACTIVE${NC} активных соединений (ESTAB)"
+        fi
+    done
 }
 
 # ─── УПРАВЛЕНИЕ ─────────────────────────────────────────────
@@ -543,7 +618,10 @@ delete_proxy() {
     read -rp "Удалить '$CONTAINER'? [y/N] " confirm
     [[ "${confirm,,}" != "y" ]] && return
 
-    # Бэкап перед удалением
+    local PORT
+    PORT=$(docker inspect "$CONTAINER" \
+        --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+
     mkdir -p "$BACKUP_DIR"
     grep "^$CONTAINER|" "$CONFIG_FILE" > "$BACKUP_DIR/${CONTAINER}_deleted_$(date +%Y%m%d_%H%M%S).bak" 2>/dev/null
 
@@ -551,9 +629,393 @@ delete_proxy() {
     docker rm "$CONTAINER" >/dev/null 2>&1
     sed -i "/^$CONTAINER|/d" "$CONFIG_FILE"
 
+    # Закрыть порт в firewall
+    read -rp "Закрыть порт $PORT в firewall? [y/N] " fw
+    [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
+
     success "Удалён: $CONTAINER"
     log "Удалён: $CONTAINER"
     pause
+}
+
+# ─── ЭКСПОРТ ВСЕХ ССЫЛОК ────────────────────────────────────
+
+export_links() {
+    banner
+    echo -e "${C}═══ ЭКСПОРТ ССЫЛОК ═══${NC}\n"
+
+    mapfile -t containers < <(docker ps -a --format "{{.Names}}" | grep "^mtproto-")
+    if [[ ${#containers[@]} -eq 0 ]]; then
+        warn "Прокси не найдены."; pause; return
+    fi
+
+    local IP
+    IP=$(get_public_ip)
+
+    {
+        echo "# MTProxy Links Export — $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "# IP: $IP"
+        echo ""
+    } > "$EXPORT_FILE"
+
+    for CONTAINER in "${containers[@]}"; do
+        local PORT CMD SECRET DOMAIN STATUS
+        STATUS=$(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null)
+        PORT=$(docker inspect "$CONTAINER" \
+            --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+        CMD=$(docker inspect "$CONTAINER" --format='{{join .Config.Cmd " "}}' 2>/dev/null)
+        SECRET=$(echo "$CMD" | awk '{print $NF}')
+        DOMAIN=$(grep "^$CONTAINER|" "$CONFIG_FILE" 2>/dev/null | cut -d'|' -f5 || echo "—")
+
+        local LINK="tg://proxy?server=$IP&port=$PORT&secret=$SECRET"
+        local HTTPS_LINK="https://t.me/proxy?server=$IP&port=$PORT&secret=$SECRET"
+
+        {
+            echo "## $CONTAINER  [$STATUS]"
+            echo "Домен: $DOMAIN | Порт: $PORT"
+            echo "tg://   $LINK"
+            echo "HTTPS:  $HTTPS_LINK"
+            echo ""
+        } >> "$EXPORT_FILE"
+
+        echo -e "${W}$CONTAINER${NC} [${STATUS}]"
+        echo -e "  ${B}$LINK${NC}"
+    done
+
+    echo ""
+    success "Сохранено в: $EXPORT_FILE"
+    echo -e "\n${DIM}Содержимое файла:${NC}"
+    cat "$EXPORT_FILE"
+    pause
+}
+
+# ─── ИМПОРТ / МИГРАЦИЯ ──────────────────────────────────────
+
+migrate_export() {
+    banner
+    echo -e "${Y}═══ ЭКСПОРТ ДЛЯ МИГРАЦИИ ═══${NC}\n"
+    warn "Этот файл содержит все настройки. Скопируй его на новый сервер."
+
+    local MIGRATION_FILE="$CONFIG_DIR/migration_$(date +%Y%m%d_%H%M%S).sh"
+    local IP
+    IP=$(get_public_ip)
+
+    {
+        echo "#!/bin/bash"
+        echo "# MTProxy Migration Script — $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "# Экспортировано с сервера: $IP"
+        echo ""
+        echo "# Запусти этот скрипт на новом сервере от root"
+        echo ""
+    } > "$MIGRATION_FILE"
+
+    mapfile -t containers < <(docker ps -a --format "{{.Names}}" | grep "^mtproto-")
+
+    for CONTAINER in "${containers[@]}"; do
+        local PORT CMD SECRET DOMAIN
+        PORT=$(docker inspect "$CONTAINER" \
+            --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+        CMD=$(docker inspect "$CONTAINER" --format='{{join .Config.Cmd " "}}' 2>/dev/null)
+        SECRET=$(echo "$CMD" | awk '{print $NF}')
+        DOMAIN=$(grep "^$CONTAINER|" "$CONFIG_FILE" 2>/dev/null | cut -d'|' -f5 || echo "google.com")
+        local CLIENT_ID="${CONTAINER#mtproto-}"
+
+        {
+            echo "# $CONTAINER"
+            echo "docker run -d \\"
+            echo "    --name \"$CONTAINER\" \\"
+            echo "    --restart unless-stopped \\"
+            echo "    -p $PORT:$PORT \\"
+            echo "    --log-opt max-size=10m \\"
+            echo "    --log-opt max-file=3 \\"
+            echo "    nineseconds/mtg:2 \\"
+            echo "    simple-run -n 1.1.1.1 -i prefer-ipv4 0.0.0.0:$PORT \"$SECRET\""
+            echo "echo \"$CONTAINER|$CLIENT_ID|$PORT|$SECRET|$DOMAIN|migrated-$(date '+%Y-%m-%d')\" >> /etc/mtproxy/proxies.conf"
+            echo ""
+        } >> "$MIGRATION_FILE"
+    done
+
+    chmod +x "$MIGRATION_FILE"
+    success "Скрипт миграции: $MIGRATION_FILE"
+    echo -e "\n${C}Скопируй файл на новый сервер:${NC}"
+    echo -e "  scp $MIGRATION_FILE root@НОВЫЙ_IP:/root/"
+    echo -e "  ssh root@НОВЫЙ_IP 'bash /root/$(basename "$MIGRATION_FILE")'"
+    pause
+}
+
+# ─── HEALTHCHECK (CRON) ─────────────────────────────────────
+
+setup_healthcheck() {
+    banner
+    echo -e "${C}═══ HEALTHCHECK / АВТОПЕРЕЗАПУСК ═══${NC}\n"
+    echo "Cron-задача будет проверять все прокси каждые 5 минут"
+    echo "и перезапускать упавшие контейнеры автоматически."
+    echo ""
+    echo "  1) Включить healthcheck"
+    echo "  2) Отключить healthcheck"
+    echo "  3) Показать статус"
+    read -rp "Выбор: " hc
+
+    case $hc in
+        1)
+            # Создаём скрипт healthcheck
+            cat > /etc/mtproxy/healthcheck.sh << 'HCEOF'
+#!/bin/bash
+LOG="/var/log/mtproxy.log"
+for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
+    STATUS=$(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null)
+    if [[ "$STATUS" != "running" ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] HEALTHCHECK: $CONTAINER упал ($STATUS), перезапуск..." >> "$LOG"
+        docker start "$CONTAINER" >/dev/null 2>&1
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] HEALTHCHECK: $CONTAINER перезапущен." >> "$LOG"
+    fi
+done
+HCEOF
+            chmod +x /etc/mtproxy/healthcheck.sh
+
+            # Добавляем в cron (убираем дубликаты)
+            crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab -
+            (crontab -l 2>/dev/null; echo "*/5 * * * * /etc/mtproxy/healthcheck.sh $CRON_TAG") | crontab -
+
+            success "Healthcheck включён (каждые 5 минут)."
+            log "Healthcheck включён"
+            ;;
+        2)
+            crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab -
+            success "Healthcheck отключён."
+            log "Healthcheck отключён"
+            ;;
+        3)
+            echo -e "\n${C}Текущие cron-задачи:${NC}"
+            crontab -l 2>/dev/null | grep "$CRON_TAG" || echo "  Healthcheck не настроен."
+            ;;
+    esac
+    pause
+}
+
+# ─── АВТО-ROTATE СЕКРЕТА ────────────────────────────────────
+
+setup_auto_rotate() {
+    banner
+    echo -e "${C}═══ АВТО-ОБНОВЛЕНИЕ СЕКРЕТА ═══${NC}\n"
+    echo "Автоматически обновлять секреты всех прокси по расписанию."
+    echo ""
+    echo "  1) Каждую неделю (воскресенье 03:00)"
+    echo "  2) Каждый месяц (1-е число 03:00)"
+    echo "  3) Отключить авто-rotate"
+    echo "  4) Показать статус"
+    read -rp "Выбор: " ar
+
+    case $ar in
+        1|2)
+            # Создаём скрипт авто-rotate
+            cat > /etc/mtproxy/auto_rotate.sh << 'AREOF'
+#!/bin/bash
+LOG="/var/log/mtproxy.log"
+CONFIG="/etc/mtproxy/proxies.conf"
+BACKUP="/etc/mtproxy/backups"
+mkdir -p "$BACKUP"
+
+for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
+    PORT=$(docker inspect "$CONTAINER" \
+        --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+    DOMAIN=$(grep "^$CONTAINER|" "$CONFIG" 2>/dev/null | cut -d'|' -f5 || echo "google.com")
+    CLIENT_ID=$(grep "^$CONTAINER|" "$CONFIG" 2>/dev/null | cut -d'|' -f2 || echo "unknown")
+
+    grep "^$CONTAINER|" "$CONFIG" > "$BACKUP/${CONTAINER}_autorotate_$(date +%Y%m%d).bak" 2>/dev/null
+
+    NEW_SECRET=$(docker run --rm nineseconds/mtg:2 generate-secret --hex "$DOMAIN" 2>/dev/null)
+    if [[ -z "$NEW_SECRET" ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTO-ROTATE ERROR: $CONTAINER — не удалось получить секрет" >> "$LOG"
+        continue
+    fi
+
+    docker stop "$CONTAINER" >/dev/null 2>&1
+    docker rm "$CONTAINER" >/dev/null 2>&1
+
+    docker run -d \
+        --name "$CONTAINER" \
+        --restart unless-stopped \
+        -p "$PORT:$PORT" \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
+        nineseconds/mtg:2 \
+        simple-run -n 1.1.1.1 -i prefer-ipv4 0.0.0.0:"$PORT" "$NEW_SECRET" >/dev/null 2>&1
+
+    sed -i "/^$CONTAINER|/d" "$CONFIG"
+    echo "$CONTAINER|$CLIENT_ID|$PORT|$NEW_SECRET|$DOMAIN|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTO-ROTATE OK: $CONTAINER, новый секрет: $NEW_SECRET" >> "$LOG"
+done
+AREOF
+            chmod +x /etc/mtproxy/auto_rotate.sh
+
+            # Убираем старый cron авто-rotate
+            crontab -l 2>/dev/null | grep -v "auto_rotate" | crontab -
+
+            if [[ $ar -eq 1 ]]; then
+                (crontab -l 2>/dev/null; echo "0 3 * * 0 /etc/mtproxy/auto_rotate.sh # mtproxy-rotate") | crontab -
+                success "Авто-rotate: каждое воскресенье в 03:00"
+            else
+                (crontab -l 2>/dev/null; echo "0 3 1 * * /etc/mtproxy/auto_rotate.sh # mtproxy-rotate") | crontab -
+                success "Авто-rotate: каждое 1-е число месяца в 03:00"
+            fi
+            log "Авто-rotate настроен (вариант $ar)"
+            ;;
+        3)
+            crontab -l 2>/dev/null | grep -v "auto_rotate" | crontab -
+            success "Авто-rotate отключён."
+            ;;
+        4)
+            echo -e "\n${C}Текущие задачи rotate:${NC}"
+            crontab -l 2>/dev/null | grep "auto_rotate" || echo "  Авто-rotate не настроен."
+            ;;
+    esac
+    pause
+}
+
+# ─── УВЕДОМЛЕНИЯ В TELEGRAM ─────────────────────────────────
+
+setup_tg_notify() {
+    banner
+    echo -e "${C}═══ УВЕДОМЛЕНИЯ В TELEGRAM ═══${NC}\n"
+    echo "Бот будет писать тебе когда прокси упал или перезапустился."
+    echo ""
+    echo "  1) Настроить уведомления"
+    echo "  2) Тест уведомления"
+    echo "  3) Отключить уведомления"
+    read -rp "Выбор: " tn
+
+    local NOTIFY_CONF="$CONFIG_DIR/notify.conf"
+
+    case $tn in
+        1)
+            echo ""
+            echo -e "${C}Создай бота через @BotFather и получи токен.${NC}"
+            echo -e "${C}Свой chat_id узнай через @userinfobot.${NC}\n"
+            read -rp "Bot Token: " BOT_TOKEN
+            read -rp "Chat ID:   " CHAT_ID
+
+            echo "BOT_TOKEN=$BOT_TOKEN" > "$NOTIFY_CONF"
+            echo "CHAT_ID=$CHAT_ID" >> "$NOTIFY_CONF"
+            chmod 600 "$NOTIFY_CONF"
+
+            # Патчим healthcheck чтобы слал уведомления
+            cat > /etc/mtproxy/healthcheck.sh << 'HCEOF'
+#!/bin/bash
+LOG="/var/log/mtproxy.log"
+NOTIFY_CONF="/etc/mtproxy/notify.conf"
+
+_tg_send() {
+    [[ ! -f "$NOTIFY_CONF" ]] && return
+    source "$NOTIFY_CONF"
+    curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+        -d chat_id="$CHAT_ID" \
+        -d text="$1" \
+        -d parse_mode="HTML" >/dev/null 2>&1
+}
+
+HOSTNAME=$(hostname)
+for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
+    STATUS=$(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null)
+    if [[ "$STATUS" != "running" ]]; then
+        MSG="🔴 <b>MTProxy упал!</b>%0AСервер: $HOSTNAME%0AКонтейнер: $CONTAINER%0AСтатус: $STATUS%0AВремя: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] HEALTHCHECK: $CONTAINER упал, перезапуск..." >> "$LOG"
+        docker start "$CONTAINER" >/dev/null 2>&1
+        sleep 3
+        NEW_STATUS=$(docker inspect --format='{{.State.Status}}' "$CONTAINER" 2>/dev/null)
+        if [[ "$NEW_STATUS" == "running" ]]; then
+            MSG2="🟢 <b>MTProxy восстановлен!</b>%0AСервер: $HOSTNAME%0AКонтейнер: $CONTAINER%0AВремя: $(date '+%Y-%m-%d %H:%M:%S')"
+            _tg_send "$MSG"
+            _tg_send "$MSG2"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] HEALTHCHECK: $CONTAINER перезапущен." >> "$LOG"
+        else
+            MSG3="❌ <b>MTProxy НЕ запустился!</b>%0AСервер: $HOSTNAME%0AКонтейнер: $CONTAINER%0AПроверь сервер вручную!"
+            _tg_send "$MSG"
+            _tg_send "$MSG3"
+        fi
+    fi
+done
+HCEOF
+            chmod +x /etc/mtproxy/healthcheck.sh
+
+            # Добавляем healthcheck в cron если ещё нет
+            if ! crontab -l 2>/dev/null | grep -q "$CRON_TAG"; then
+                (crontab -l 2>/dev/null; echo "*/5 * * * * /etc/mtproxy/healthcheck.sh $CRON_TAG") | crontab -
+            fi
+
+            success "Уведомления настроены! Healthcheck активен."
+            log "TG уведомления настроены для chat_id=$CHAT_ID"
+            ;;
+        2)
+            if [[ ! -f "$NOTIFY_CONF" ]]; then
+                warn "Сначала настрой уведомления (пункт 1)."; pause; return
+            fi
+            source "$NOTIFY_CONF"
+            RESULT=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+                -d chat_id="$CHAT_ID" \
+                -d text="✅ <b>MTProxy тест!</b>%0AУведомления работают. Сервер: $(hostname)" \
+                -d parse_mode="HTML")
+            if echo "$RESULT" | grep -q '"ok":true'; then
+                success "Тестовое сообщение отправлено!"
+            else
+                warn "Ошибка! Проверь токен и chat_id."
+                echo "$RESULT"
+            fi
+            ;;
+        3)
+            rm -f "$NOTIFY_CONF"
+            success "Уведомления отключены."
+            ;;
+    esac
+    pause
+}
+
+# ─── АВТО-ОБНОВЛЕНИЕ СКРИПТА ────────────────────────────────
+
+self_update() {
+    banner
+    echo -e "${C}═══ ОБНОВЛЕНИЕ СКРИПТА ═══${NC}\n"
+    info "Проверяю обновления на GitHub..."
+
+    local TMP="/tmp/mtproxy_new.sh"
+    curl -fsSL "$GITHUB_RAW" -o "$TMP" 2>/dev/null
+
+    if [[ ! -f "$TMP" || ! -s "$TMP" ]]; then
+        warn "Не удалось загрузить обновление. Проверь интернет-соединение."
+        pause; return
+    fi
+
+    local NEW_VER
+    NEW_VER=$(grep '^VERSION=' "$TMP" | cut -d'"' -f2)
+
+    if [[ -z "$NEW_VER" ]]; then
+        warn "Не удалось определить версию. Файл повреждён?"
+        rm -f "$TMP"; pause; return
+    fi
+
+    echo -e "  Текущая версия: ${Y}$VERSION${NC}"
+    echo -e "  Новая версия:   ${G}$NEW_VER${NC}\n"
+
+    if [[ "$NEW_VER" == "$VERSION" ]]; then
+        success "У тебя уже последняя версия!"
+        rm -f "$TMP"; pause; return
+    fi
+
+    read -rp "Обновить до v$NEW_VER? [y/N] " confirm
+    if [[ "${confirm,,}" != "y" ]]; then
+        warn "Отменено."; rm -f "$TMP"; pause; return
+    fi
+
+    # Бэкап текущей версии
+    cp "$BINARY_PATH" "$BACKUP_DIR/mtproxy_v${VERSION}_$(date +%Y%m%d).bak" 2>/dev/null
+
+    cp "$TMP" "$BINARY_PATH"
+    chmod +x "$BINARY_PATH"
+    rm -f "$TMP"
+
+    success "Обновлено до v$NEW_VER! Перезапусти скрипт: mtproxy"
+    log "Обновление: v$VERSION -> v$NEW_VER"
+    exit 0
 }
 
 # ─── ЛОГ СКРИПТА ────────────────────────────────────────────
@@ -580,7 +1042,9 @@ full_uninstall() {
     ids=$(docker ps -aq --filter "name=mtproto-")
     [[ -n "$ids" ]] && docker stop $ids >/dev/null 2>&1 && docker rm $ids >/dev/null 2>&1
 
+    crontab -l 2>/dev/null | grep -v "$CRON_TAG" | grep -v "auto_rotate" | crontab -
     rm -f "$BINARY_PATH"
+
     success "Скрипт удалён. Конфиги и бэкапы сохранены в $CONFIG_DIR"
     log "Полное удаление выполнено."
     exit 0
@@ -591,30 +1055,44 @@ full_uninstall() {
 main_menu() {
     while true; do
         banner
-        echo -e "  ${G}1)${NC} Добавить новый прокси"
-        echo -e "  ${C}2)${NC} Список всех прокси"
-        echo -e "  ${C}3)${NC} Детали / QR по клиенту"
-        echo -e "  ${C}4)${NC} Статус и трафик"
-        echo -e "  ${Y}5)${NC} Start / Stop / Restart"
-        echo -e "  ${Y}6)${NC} Обновить секрет (rotate)"
-        echo -e "  ${R}7)${NC} Удалить прокси"
-        echo -e "  ${DIM}8)${NC} Просмотр лога"
-        echo -e "  ${R}9)${NC} Полное удаление"
-        echo -e "  ${DIM}0)${NC} Выход\n"
+        echo -e "  ${G}1)${NC}  Добавить новый прокси"
+        echo -e "  ${C}2)${NC}  Список всех прокси"
+        echo -e "  ${C}3)${NC}  Детали / QR по клиенту"
+        echo -e "  ${C}4)${NC}  Статус, трафик и подключения"
+        echo -e "  ${Y}5)${NC}  Start / Stop / Restart"
+        echo -e "  ${Y}6)${NC}  Обновить секрет (rotate)"
+        echo -e "  ${G}7)${NC}  Экспорт всех ссылок в файл"
+        echo -e "  ${G}8)${NC}  Миграция на новый сервер"
+        echo -e "  ${C}9)${NC}  Firewall — управление портами"
+        echo -e "  ${M}10)${NC} Healthcheck / Автоперезапуск"
+        echo -e "  ${M}11)${NC} Авто-обновление секрета (cron)"
+        echo -e "  ${M}12)${NC} Уведомления в Telegram"
+        echo -e "  ${B}13)${NC} Обновить скрипт"
+        echo -e "  ${DIM}14)${NC} Просмотр лога"
+        echo -e "  ${R}15)${NC} Удалить прокси"
+        echo -e "  ${R}16)${NC} Полное удаление"
+        echo -e "  ${DIM}0)${NC}  Выход\n"
 
         read -rp "  Пункт: " choice
         case $choice in
-            1) menu_add ;;
-            2) show_list ;;
-            3) show_detail ;;
-            4) show_status ;;
-            5) manage_proxy ;;
-            6) rotate_secret ;;
-            7) delete_proxy ;;
-            8) show_log ;;
-            9) full_uninstall ;;
-            0) echo -e "${DIM}Выход.${NC}"; exit 0 ;;
-            *) warn "Неверный ввод." ;;
+            1)  menu_add ;;
+            2)  show_list ;;
+            3)  show_detail ;;
+            4)  show_status ;;
+            5)  manage_proxy ;;
+            6)  rotate_secret ;;
+            7)  export_links ;;
+            8)  migrate_export ;;
+            9)  firewall_menu ;;
+            10) setup_healthcheck ;;
+            11) setup_auto_rotate ;;
+            12) setup_tg_notify ;;
+            13) self_update ;;
+            14) show_log ;;
+            15) delete_proxy ;;
+            16) full_uninstall ;;
+            0)  echo -e "${DIM}Выход.${NC}"; exit 0 ;;
+            *)  warn "Неверный ввод." ;;
         esac
     done
 }
