@@ -7,7 +7,7 @@
 ## ⚡ Быстрая установка
 
 ```bash
-wget -O mtproxy.sh https://raw.githubusercontent.com/ВАШ_НИК/mtproxy/main/mtproxy.sh && chmod +x mtproxy.sh && sudo ./mtproxy.sh
+wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh && chmod +x mtproxy.sh && sudo ./mtproxy.sh
 ```
 
 После установки скрипт доступен глобально как команда `mtproxy`.
