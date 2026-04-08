@@ -135,24 +135,46 @@ port_in_use() {
 
 # ─── ДОМЕНЫ ─────────────────────────────────────────────────
 
-declare -A DOMAIN_CATEGORIES
-DOMAIN_CATEGORIES["1:🌍 Международные (Tech)"]="google.com cloudflare.com microsoft.com apple.com amazon.com github.com stackoverflow.com gitlab.com"
-DOMAIN_CATEGORIES["2:🌍 Международные (СМИ)"]="wikipedia.org bbc.com cnn.com reuters.com nytimes.com theguardian.com bloomberg.com forbes.com"
-DOMAIN_CATEGORIES["3:🌍 Международные (Развлечения)"]="netflix.com twitch.tv discord.com zoom.us spotify.com reddit.com medium.com tumblr.com"
-DOMAIN_CATEGORIES["4:🌍 Международные (Образование)"]="coursera.org udemy.com khanacademy.org edx.org duolingo.com ted.com skillshare.com"
-DOMAIN_CATEGORIES["5:🇷🇺 Российские (СМИ)"]="lenta.ru rbc.ru ria.ru kommersant.ru vedomosti.ru iz.ru novayagazeta.ru meduza.io"
-DOMAIN_CATEGORIES["6:🇷🇺 Российские (Tech/IT)"]="habr.com mail.ru yandex.ru vk.com 2ch.hk pikabu.ru 4pda.to 3dnews.ru"
-DOMAIN_CATEGORIES["7:🇷🇺 Российские (Образование)"]="stepik.org geekbrains.ru skillbox.ru hexlet.io netology.ru skillfactory.ru"
-DOMAIN_CATEGORIES["8:🇷🇺 Российские (Сервисы)"]="gosuslugi.ru sberbank.ru tinkoff.ru avito.ru ozon.ru wildberries.ru kinopoisk.ru ivi.ru"
+# Категории: параллельные массивы меток и доменов
+CAT_LABELS=(
+    "[Int] Tech"
+    "[Int] SMI"
+    "[Int] Entertainment"
+    "[Int] Education"
+    "[RU]  SMI"
+    "[RU]  Tech/IT"
+    "[RU]  Education"
+    "[RU]  Services"
+)
 
+CAT_DISPLAY=(
+    "Международные (Tech)"
+    "Международные (СМИ)"
+    "Международные (Развлечения)"
+    "Международные (Образование)"
+    "Российские (СМИ)"
+    "Российские (Tech/IT)"
+    "Российские (Образование)"
+    "Российские (Сервисы)"
+)
+
+CAT_DOMAINS=(
+    "google.com cloudflare.com microsoft.com apple.com amazon.com github.com stackoverflow.com gitlab.com"
+    "wikipedia.org bbc.com cnn.com reuters.com nytimes.com theguardian.com bloomberg.com forbes.com"
+    "netflix.com twitch.tv discord.com zoom.us spotify.com reddit.com medium.com tumblr.com"
+    "coursera.org udemy.com khanacademy.org edx.org duolingo.com ted.com skillshare.com"
+    "lenta.ru rbc.ru ria.ru kommersant.ru vedomosti.ru iz.ru novayagazeta.ru meduza.io"
+    "habr.com mail.ru yandex.ru vk.com 2ch.hk pikabu.ru 4pda.to 3dnews.ru"
+    "stepik.org geekbrains.ru skillbox.ru hexlet.io netology.ru skillfactory.ru"
+    "gosuslugi.ru sberbank.ru tinkoff.ru avito.ru ozon.ru wildberries.ru kinopoisk.ru ivi.ru"
+)
+
+# Строим плоский массив всех доменов в порядке категорий
 DOMAINS=()
-
 _build_domain_list() {
     DOMAINS=()
-    local keys
-    keys=$(echo "${!DOMAIN_CATEGORIES[@]}" | tr ' ' '\n' | sort)
-    for key in $keys; do
-        for d in ${DOMAIN_CATEGORIES[$key]}; do
+    for cat_domains in "${CAT_DOMAINS[@]}"; do
+        for d in $cat_domains; do
             DOMAINS+=("$d")
         done
     done
@@ -161,31 +183,31 @@ _build_domain_list() {
 choose_domain() {
     _build_domain_list
 
-    local keys
-    keys=$(echo "${!DOMAIN_CATEGORIES[@]}" | tr ' ' '\n' | sort)
-
     echo -e "\n${C}Выберите домен для Fake TLS маскировки:${NC}\n"
 
     local idx=0
-    for key in $keys; do
-        local label="${key#*:}"
-        echo -e "${W}── ${label} ──${NC}"
-        for d in ${DOMAIN_CATEGORIES[$key]}; do
-            idx=$((idx+1))
+    for i in "${!CAT_DISPLAY[@]}"; do
+        echo -e "${W}  ── ${CAT_DISPLAY[$i]} ──${NC}"
+        local col=0
+        for d in ${CAT_DOMAINS[$i]}; do
+            idx=$((idx + 1))
+            col=$((col + 1))
             printf "  ${Y}%3d)${NC} %-25s" "$idx" "$d"
-            [[ $((idx % 3)) -eq 0 ]] && echo ""
+            [[ $((col % 3)) -eq 0 ]] && echo ""
         done
-        echo -e "\n"
+        # перенос строки если последняя строка не полная
+        [[ $((col % 3)) -ne 0 ]] && echo ""
+        echo ""
     done
 
-    echo -e "${DIM}  0) Ввести свой домен${NC}\n"
+    echo -e "${DIM}    0) Ввести свой домен${NC}\n"
 
     local choice
-    read -rp "Выбор [0-${#DOMAINS[@]}]: " choice
+    read -rp "  Выбор [0-${#DOMAINS[@]}]: " choice
 
-    if [[ "$choice" -eq 0 ]]; then
-        read -rp "Введите домен: " CHOSEN_DOMAIN
-    elif [[ "$choice" -ge 1 && "$choice" -le "${#DOMAINS[@]}" ]]; then
+    if [[ "$choice" == "0" ]]; then
+        read -rp "  Введите домен: " CHOSEN_DOMAIN
+    elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le "${#DOMAINS[@]}" ]]; then
         CHOSEN_DOMAIN="${DOMAINS[$((choice-1))]}"
     else
         warn "Некорректный выбор, используется google.com"
@@ -193,31 +215,138 @@ choose_domain() {
     fi
 
     CHOSEN_DOMAIN="${CHOSEN_DOMAIN:-google.com}"
-    echo -e "${G}Домен: $CHOSEN_DOMAIN${NC}"
+    echo -e "  ${G}Выбран домен: $CHOSEN_DOMAIN${NC}"
+}
+
+# Проверяет открыт ли порт в firewall
+_port_fw_status() {
+    local port="$1"
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
+        ufw status 2>/dev/null | grep -qE "^${port}[/ ].*ALLOW" && echo "open" || echo "closed"
+    elif command -v firewall-cmd &>/dev/null; then
+        firewall-cmd --list-ports 2>/dev/null | grep -q "${port}/tcp" && echo "open" || echo "closed"
+    elif command -v iptables &>/dev/null; then
+        iptables -L INPUT -n 2>/dev/null | grep -q "dpt:${port}" && echo "open" || echo "closed"
+    else
+        echo "unknown"
+    fi
+}
+
+# Показывает статус всех портов
+_show_ports_status() {
+    local PRESET_PORTS=(443 8443 3128 1080)
+
+    echo -e "\n${W}  Статус портов:${NC}"
+    echo -e "  ${DIM}──────────────────────────────────────${NC}"
+    printf "  ${W}%-6s  %-12s  %-16s  %s${NC}\n" "Порт" "Процесс" "Firewall" "Прокси"
+    echo -e "  ${DIM}──────────────────────────────────────${NC}"
+
+    # Порты используемых прокси
+    local USED_PORTS=()
+    local USED_NAMES=()
+    mapfile -t _containers < <(docker ps -a --format "{{.Names}}" 2>/dev/null | grep "^mtproto-")
+    for c in "${_containers[@]}"; do
+        local p
+        p=$(docker inspect "$c" \
+            --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+        if [[ -n "$p" ]]; then
+            USED_PORTS+=("$p")
+            USED_NAMES+=("${c#mtproto-}")
+        fi
+    done
+
+    # Объединяем: preset + нестандартные порты прокси
+    local ALL_PORTS=("${PRESET_PORTS[@]}")
+    for up in "${USED_PORTS[@]}"; do
+        local found=0
+        for pp in "${PRESET_PORTS[@]}"; do [[ "$up" == "$pp" ]] && found=1 && break; done
+        [[ $found -eq 0 ]] && ALL_PORTS+=("$up")
+    done
+
+    for port in "${ALL_PORTS[@]}"; do
+        local proc_label proc_color fw_label fw_color proxy_label=""
+
+        # Занят процессом?
+        if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
+            proc_label="занят"; proc_color="${R}"
+        else
+            proc_label="свободен"; proc_color="${G}"
+        fi
+
+        # Firewall статус
+        local fw_s; fw_s=$(_port_fw_status "$port")
+        case $fw_s in
+            open)    fw_label="открыт";      fw_color="${G}" ;;
+            closed)  fw_label="закрыт";      fw_color="${R}" ;;
+            *)       fw_label="неизвестно";  fw_color="${Y}" ;;
+        esac
+
+        # Используется прокси?
+        for i in "${!USED_PORTS[@]}"; do
+            [[ "${USED_PORTS[$i]}" == "$port" ]] && proxy_label="${USED_NAMES[$i]}" && break
+        done
+
+        printf "  ${W}%-6s${NC}  ${proc_color}%-12s${NC}  ${fw_color}%-16s${NC}  ${C}%s${NC}\n" \
+            "$port" "$proc_label" "$fw_label" "$proxy_label"
+    done
+    echo -e "  ${DIM}──────────────────────────────────────${NC}\n"
 }
 
 choose_port() {
-    echo -e "\n${C}Выберите порт:${NC}"
+    _show_ports_status
+
+    echo -e "${C}  Выберите порт:${NC}"
     echo "  1) 443   (рекомендуется — HTTPS)"
     echo "  2) 8443"
     echo "  3) 3128"
-    echo "  4) Свой порт"
-    read -rp "Выбор [1-4]: " pc
+    echo "  4) 1080  (SOCKS)"
+    echo "  5) Свой порт"
+    read -rp "  Выбор [1-5]: " pc
 
     case $pc in
         2) CHOSEN_PORT=8443 ;;
         3) CHOSEN_PORT=3128 ;;
-        4)
-            read -rp "Порт: " CHOSEN_PORT
+        4) CHOSEN_PORT=1080 ;;
+        5)
+            read -rp "  Порт: " CHOSEN_PORT
             [[ "$CHOSEN_PORT" =~ ^[0-9]+$ ]] || { warn "Некорректный порт, используется 443."; CHOSEN_PORT=443; }
             ;;
         *) CHOSEN_PORT=443 ;;
     esac
 
-    if port_in_use "$CHOSEN_PORT"; then
-        warn "Порт $CHOSEN_PORT уже занят!"
-        read -rp "Принудительно использовать? [y/N] " force
-        [[ "${force,,}" != "y" ]] && return 1
+    # Проверка — занят другим процессом (не нашим контейнером)?
+    if ss -tlnp 2>/dev/null | grep -q ":${CHOSEN_PORT} "; then
+        local our=0
+        mapfile -t _running < <(docker ps --format "{{.Names}}" 2>/dev/null | grep "^mtproto-")
+        for c in "${_running[@]}"; do
+            local cp
+            cp=$(docker inspect "$c" \
+                --format='{{range $p,$cc := .HostConfig.PortBindings}}{{(index $cc 0).HostPort}}{{end}}' 2>/dev/null)
+            [[ "$cp" == "$CHOSEN_PORT" ]] && our=1 && break
+        done
+        if [[ $our -eq 0 ]]; then
+            warn "Порт $CHOSEN_PORT занят сторонним процессом!"
+            read -rp "  Принудительно использовать? [y/N] " force
+            [[ "${force,,}" != "y" ]] && return 1
+        else
+            warn "Порт $CHOSEN_PORT уже используется другим mtproxy!"
+            read -rp "  Всё равно использовать? [y/N] " force
+            [[ "${force,,}" != "y" ]] && return 1
+        fi
+    fi
+
+    # Firewall — открыть если закрыт
+    local fw_s; fw_s=$(_port_fw_status "$CHOSEN_PORT")
+    if [[ "$fw_s" == "closed" ]]; then
+        warn "Порт $CHOSEN_PORT закрыт в firewall!"
+        read -rp "  Открыть автоматически? [Y/n] " fw_open
+        if [[ "${fw_open,,}" != "n" ]]; then
+            _firewall_open "$CHOSEN_PORT"
+        else
+            warn "Порт не открыт — клиенты могут не подключиться."
+        fi
+    elif [[ "$fw_s" == "open" ]]; then
+        success "Порт $CHOSEN_PORT уже открыт в firewall."
     fi
 }
 
