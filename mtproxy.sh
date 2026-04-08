@@ -304,6 +304,7 @@ choose_port() {
     read -rp "  Выбор [1-5]: " pc
 
     case $pc in
+        1) CHOSEN_PORT=443  ;;
         2) CHOSEN_PORT=8443 ;;
         3) CHOSEN_PORT=3128 ;;
         4) CHOSEN_PORT=1080 ;;
@@ -311,8 +312,13 @@ choose_port() {
             read -rp "  Порт: " CHOSEN_PORT
             [[ "$CHOSEN_PORT" =~ ^[0-9]+$ ]] || { warn "Некорректный порт, используется 443."; CHOSEN_PORT=443; }
             ;;
-        *) CHOSEN_PORT=443 ;;
+        *)
+            warn "Неверный выбор, используется 443."
+            CHOSEN_PORT=443
+            ;;
     esac
+
+    info "Выбран порт: $CHOSEN_PORT"
 
     # Проверка — занят другим процессом (не нашим контейнером)?
     if ss -tlnp 2>/dev/null | grep -q ":${CHOSEN_PORT} "; then
