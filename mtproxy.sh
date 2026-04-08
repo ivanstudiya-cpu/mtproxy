@@ -320,25 +320,36 @@ choose_port() {
 
     info "Выбран порт: $CHOSEN_PORT"
 
-    # Проверка — занят другим процессом (не нашим контейнером)?
-    if ss -tlnp 2>/dev/null | grep -q ":${CHOSEN_PORT} "; then
-        local our=0
-        mapfile -t _running < <(docker ps --format "{{.Names}}" 2>/dev/null | grep "^mtproto-")
-        for c in "${_running[@]}"; do
-            local cp
-            cp=$(docker inspect "$c" \
-                --format='{{range $p,$cc := .HostConfig.PortBindings}}{{(index $cc 0).HostPort}}{{end}}' 2>/dev/null)
-            [[ "$cp" == "$CHOSEN_PORT" ]] && our=1 && break
-        done
-        if [[ $our -eq 0 ]]; then
-            warn "Порт $CHOSEN_PORT занят сторонним процессом!"
-            read -rp "  Принудительно использовать? [y/N] " force
-            [[ "${force,,}" != "y" ]] && return 1
-        else
-            warn "Порт $CHOSEN_PORT уже используется другим mtproxy!"
-            read -rp "  Всё равно использовать? [y/N] " force
-            [[ "${force,,}" != "y" ]] && return 1
+    # Проверка — занят нашим контейнером?
+    local our=0
+    local our_name=""
+    mapfile -t _running < <(docker ps --format "{{.Names}}" 2>/dev/null | grep "^mtproto-")
+    for c in "${_running[@]}"; do
+        local cp
+        cp=$(docker inspect "$c" \
+            --format='{{range $p,$cc := .HostConfig.PortBindings}}{{(index $cc 0).HostPort}}{{end}}' 2>/dev/null)
+        if [[ "$cp" == "$CHOSEN_PORT" ]]; then
+            our=1
+            our_name="${c#mtproto-}"
+            break
         fi
+    done
+
+    if [[ $our -eq 1 ]]; then
+        echo ""
+        echo -e "  ${R}╔══════════════════════════════════════════════╗${NC}"
+        echo -e "  ${R}║  Порт $CHOSEN_PORT уже занят прокси: $our_name ${NC}"
+        echo -e "  ${R}║  Выберите другой порт!                      ${NC}"
+        echo -e "  ${R}╚══════════════════════════════════════════════╝${NC}"
+        echo ""
+        return 1
+    fi
+
+    # Занят сторонним процессом?
+    if ss -tlnp 2>/dev/null | grep -q ":${CHOSEN_PORT} "; then
+        warn "Порт $CHOSEN_PORT занят сторонним процессом!"
+        read -rp "  Принудительно использовать? [y/N] " force
+        [[ "${force,,}" != "y" ]] && return 1
     fi
 
     # Firewall — открыть если закрыт
