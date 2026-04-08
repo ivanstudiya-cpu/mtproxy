@@ -1,6 +1,42 @@
-# 🔒 MTProxy Manager v3.0 — Telegram MTProxy с Fake TLS
+# 🔒 MTProxy Manager — Telegram MTProxy с Fake TLS
+
+![version](https://img.shields.io/badge/version-3.0-blue)
+![bash](https://img.shields.io/badge/bash-5.0+-green)
+![docker](https://img.shields.io/badge/docker-required-blue)
+![license](https://img.shields.io/badge/license-MIT-brightgreen)
+![platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian%20%7C%20CentOS-lightgrey)
 
 > Bash-скрипт для быстрого развёртывания и управления MTProxy серверами для Telegram с маскировкой трафика под HTTPS (Fake TLS). Работает через Docker, устанавливается за одну команду.
+
+---
+
+## 📋 Changelog
+
+### v3.0
+- Добавлена таблица статусов портов перед выбором (процесс + firewall + прокси)
+- Автооткрытие порта в firewall при выборе закрытого
+- Порт 1080 (SOCKS) в списке выбора
+- Уведомления в Telegram (бот пишет когда прокси упал/восстановился)
+- Healthcheck через cron — автоперезапуск упавших контейнеров каждые 5 минут
+- Авто-обновление секрета по расписанию (раз в неделю или месяц)
+- Экспорт всех ссылок в файл одной командой
+- Миграция на новый сервер — генерация готового bash-скрипта
+- Firewall-помощник (UFW / firewalld / iptables)
+- Авто-обновление скрипта с GitHub
+- Статистика подключений по каждому прокси
+
+### v2.0
+- Rotate Secret с автобэкапом
+- Автобэкапы перед любым деструктивным действием
+- Лог всех действий в `/var/log/mtproxy.log`
+- QR-коды для tg:// и https://t.me/proxy
+- Start / Stop / Restart без ввода имён вручную
+- Поддержка apt / yum / dnf
+- 64 домена по категориям (российские и международные)
+
+### v1.0
+- Базовое создание MTProxy с Fake TLS через Docker
+- Список прокси с QR-кодами
 
 ---
 
