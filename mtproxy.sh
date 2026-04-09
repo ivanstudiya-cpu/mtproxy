@@ -1,11 +1,12 @@
 #!/bin/bash
 # ============================================================
-#  mtproxy — Telegram MTProxy Manager с Fake TLS
-#  Версия: 3.0
+#  Messenger Proxy Manager v4.0
+#  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
 
 BINARY_PATH="/usr/local/bin/mtproxy"
+XRAY_DIR="/etc/mtproxy/xray"
 BACKUP_DIR="/etc/mtproxy/backups"
 LOG_FILE="/var/log/mtproxy.log"
 CONFIG_DIR="/etc/mtproxy"
@@ -13,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="3.0"
+VERSION="4.0"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -47,7 +48,8 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║        MTProxy Manager v3.0  (Fake TLS)             ║
+  ║     Messenger Proxy Manager v4.0                    ║
+  ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
@@ -105,7 +107,7 @@ install_deps() {
         pkg_install curl
     fi
 
-    mkdir -p "$CONFIG_DIR" "$BACKUP_DIR"
+    mkdir -p "$CONFIG_DIR" "$BACKUP_DIR" "$XRAY_DIR"
     touch "$CONFIG_FILE" "$LOG_FILE"
 
     if [[ ! -f "$BINARY_PATH" || "$(realpath "$0")" != "$BINARY_PATH" ]]; then
@@ -1196,12 +1198,266 @@ full_uninstall() {
     exit 0
 }
 
+
+# ═══════════════════════════════════════════════════════════
+# ─── XRAY SOCKS5 (WhatsApp / универсальный прокси) ─────────
+# ═══════════════════════════════════════════════════════════
+
+xray_install() {
+    banner
+    echo -e "${G}═══ УСТАНОВКА XRAY SOCKS5 ═══${NC}
+"
+    echo "Xray SOCKS5 — универсальный прокси для WhatsApp, Instagram,"
+    echo "браузера и любых других приложений."
+    echo ""
+
+    if docker ps -a --format "{{.Names}}" | grep -q "^xray-proxy$"; then
+        warn "Xray уже установлен!"
+        pause; return
+    fi
+
+    # Выбор порта
+    echo -e "${C}Выберите порт для Xray SOCKS5:${NC}"
+    echo "  1) 1080 (стандартный SOCKS5)"
+    echo "  2) 3129"
+    echo "  3) 8080"
+    echo "  4) Свой порт"
+    read -rp "  Выбор [1-4]: " xp
+    case $xp in
+        2) XRAY_PORT=3129 ;;
+        3) XRAY_PORT=8080 ;;
+        4) read -rp "  Порт: " XRAY_PORT
+           [[ "$XRAY_PORT" =~ ^[0-9]+$ ]] || XRAY_PORT=1080 ;;
+        *) XRAY_PORT=1080 ;;
+    esac
+    info "Выбран порт: $XRAY_PORT"
+
+    # Авторизация
+    echo -e "
+${C}Защита паролем:${NC}"
+    echo "  1) Без пароля (открытый)"
+    echo "  2) С логином и паролем"
+    read -rp "  Выбор [1-2]: " xa
+    
+    local AUTH_BLOCK
+    if [[ "$xa" == "2" ]]; then
+        read -rp "  Логин: " XRAY_USER
+        read -rp "  Пароль: " XRAY_PASS
+        AUTH_BLOCK='"auth":"password","accounts":[{"user":"'"$XRAY_USER"'","pass":"'"$XRAY_PASS"'"}]'
+        info "Авторизация включена: $XRAY_USER"
+    else
+        AUTH_BLOCK='"auth":"noauth"'
+        info "Открытый доступ (без пароля)"
+    fi
+
+    # Генерируем конфиг
+    mkdir -p "$XRAY_DIR"
+    cat > "$XRAY_DIR/config.json" << XCONF
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [{
+    "port": $XRAY_PORT,
+    "protocol": "socks",
+    "settings": {$AUTH_BLOCK, "udp": true},
+    "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
+  }],
+  "outbounds": [{
+    "protocol": "freedom",
+    "settings": {}
+  }]
+}
+XCONF
+
+    info "Запуск Xray контейнера..."
+    docker run -d         --name xray-proxy         --restart unless-stopped         -p "$XRAY_PORT:$XRAY_PORT"         -v "$XRAY_DIR:/etc/xray"         --log-opt max-size=10m         --log-opt max-file=3         teddysun/xray         xray -config /etc/xray/config.json >/dev/null 2>&1
+
+    if [[ $? -ne 0 ]]; then
+        die "Xray контейнер не запустился."
+    fi
+
+    _firewall_open "$XRAY_PORT"
+
+    local IP
+    IP=$(get_public_ip)
+
+    echo "$XRAY_PORT|$XRAY_USER|$XRAY_PASS|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
+    log "Xray установлен: порт=$XRAY_PORT"
+
+    clear
+    echo -e "${G}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${G}║        Xray SOCKS5 установлен!              ║${NC}"
+    echo -e "${G}╚══════════════════════════════════════════════╝${NC}
+"
+    echo -e "  ${C}IP:${NC}       $IP"
+    echo -e "  ${C}Порт:${NC}     $XRAY_PORT"
+    echo -e "  ${C}Протокол:${NC} SOCKS5"
+    if [[ "$xa" == "2" ]]; then
+        echo -e "  ${C}Логин:${NC}    $XRAY_USER"
+        echo -e "  ${C}Пароль:${NC}   $XRAY_PASS"
+    else
+        echo -e "  ${C}Авторизация:${NC} без пароля"
+    fi
+    echo -e "
+  ${W}Как настроить:${NC}"
+    echo -e "  • Android/iPhone: Настройки → WiFi → Прокси → Вручную"
+    echo -e "    Хост: $IP  |  Порт: $XRAY_PORT  |  Тип: SOCKS5"
+    echo -e "  • Браузер: расширение Proxy SwitchyOmega"
+    echo -e "  • WhatsApp/Telegram: Настройки → Прокси → SOCKS5"
+    echo -e "
+  ${Y}QR для мобильных приложений:${NC}"
+    if [[ "$xa" == "2" ]]; then
+        qrencode -t ANSIUTF8 "socks5://$XRAY_USER:$XRAY_PASS@$IP:$XRAY_PORT"
+    else
+        qrencode -t ANSIUTF8 "socks5://$IP:$XRAY_PORT"
+    fi
+
+    pause
+}
+
+xray_status() {
+    banner
+    echo -e "${C}═══ СТАТУС XRAY SOCKS5 ═══${NC}
+"
+
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-proxy$"; then
+        warn "Xray не установлен."
+        pause; return
+    fi
+
+    local STATUS IP PORT
+    STATUS=$(docker inspect --format='{{.State.Status}}' xray-proxy 2>/dev/null)
+    PORT=$(docker inspect xray-proxy         --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+    IP=$(get_public_ip)
+
+    local COLOR="${R}"
+    [[ "$STATUS" == "running" ]] && COLOR="${G}"
+
+    echo -e "  ${W}Статус:${NC}   [${COLOR}${STATUS}${NC}]"
+    echo -e "  ${W}IP:${NC}       $IP"
+    echo -e "  ${W}Порт:${NC}     $PORT"
+    echo -e "  ${W}Протокол:${NC} SOCKS5"
+
+    if [[ -f "$CONFIG_DIR/xray.conf" ]]; then
+        local XUSER XPASS
+        XUSER=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
+        XPASS=$(cut -d'|' -f3 "$CONFIG_DIR/xray.conf")
+        [[ -n "$XUSER" ]] && echo -e "  ${W}Логин:${NC}    $XUSER"
+        [[ -n "$XPASS" ]] && echo -e "  ${W}Пароль:${NC}   $XPASS"
+    fi
+
+    echo -e "
+  ${W}SOCKS5 адрес:${NC} ${B}$IP:$PORT${NC}"
+    echo ""
+    echo -e "${C}  Трафик:${NC}"
+    docker stats --no-stream --format "  CPU: {{.CPUPerc}}  RAM: {{.MemUsage}}  NET: {{.NetIO}}" xray-proxy 2>/dev/null
+    echo ""
+    echo -e "${C}  Логи (последние 20 строк):${NC}"
+    docker logs --tail=20 xray-proxy 2>&1
+
+    pause
+}
+
+xray_manage() {
+    banner
+    echo -e "${C}═══ УПРАВЛЕНИЕ XRAY ═══${NC}
+"
+
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-proxy$"; then
+        warn "Xray не установлен."; pause; return
+    fi
+
+    local STATUS
+    STATUS=$(docker inspect --format='{{.State.Status}}' xray-proxy)
+    local COLOR="${R}"; [[ "$STATUS" == "running" ]] && COLOR="${G}"
+    echo -e "  Xray [${COLOR}${STATUS}${NC}]
+"
+    echo -e "  1) Start   2) Stop   3) Restart"
+    read -rp "  Действие: " act
+    case $act in
+        1) docker start xray-proxy >/dev/null && success "Запущен" ;;
+        2) docker stop xray-proxy >/dev/null && success "Остановлен" ;;
+        3) docker restart xray-proxy >/dev/null && success "Перезапущен" ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    log "Xray управление: $act"
+    pause
+}
+
+xray_delete() {
+    banner
+    echo -e "${R}═══ УДАЛЕНИЕ XRAY ═══${NC}
+"
+
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-proxy$"; then
+        warn "Xray не установлен."; pause; return
+    fi
+
+    read -rp "  Удалить Xray SOCKS5? [y/N] " confirm
+    [[ "${confirm,,}" != "y" ]] && return
+
+    local PORT
+    PORT=$(docker inspect xray-proxy         --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+
+    docker stop xray-proxy >/dev/null 2>&1
+    docker rm xray-proxy >/dev/null 2>&1
+    rm -f "$CONFIG_DIR/xray.conf"
+
+    read -rp "  Закрыть порт $PORT в firewall? [y/N] " fw
+    [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
+
+    success "Xray удалён."
+    log "Xray удалён"
+    pause
+}
+
+install_all() {
+    banner
+    echo -e "${G}═══ УСТАНОВКА ВСЕГО (Telegram + Xray) ═══${NC}
+"
+    echo "Будет установлено:"
+    echo "  • Telegram MTProxy с Fake TLS"
+    echo "  • Xray SOCKS5 (WhatsApp / универсальный)"
+    echo ""
+    read -rp "Продолжить? [Y/n] " confirm
+    [[ "${confirm,,}" == "n" ]] && return
+
+    menu_add
+    xray_install
+}
+
+# ─── МЕНЮ XRAY ──────────────────────────────────────────────
+
+xray_menu() {
+    while true; do
+        banner
+        echo -e "${W}  ── Xray SOCKS5 (WhatsApp / универсальный) ──${NC}
+"
+        echo -e "  ${G}1)${NC} Установить Xray SOCKS5"
+        echo -e "  ${C}2)${NC} Статус и логи"
+        echo -e "  ${Y}3)${NC} Start / Stop / Restart"
+        echo -e "  ${R}4)${NC} Удалить Xray"
+        echo -e "  ${DIM}0)${NC} Назад
+"
+
+        read -rp "  Пункт: " choice
+        case $choice in
+            1) xray_install ;;
+            2) xray_status ;;
+            3) xray_manage ;;
+            4) xray_delete ;;
+            0) return ;;
+            *) warn "Неверный ввод." ;;
+        esac
+    done
+}
+
 # ─── ГЛАВНОЕ МЕНЮ ───────────────────────────────────────────
 
 main_menu() {
     while true; do
         banner
-        echo -e "  ${G}1)${NC}  Добавить новый прокси"
+        echo -e "  ${W}── Telegram MTProxy (Fake TLS) ──${NC}"
+        echo -e "  ${G}1)${NC}  Добавить новый MTProxy"
         echo -e "  ${C}2)${NC}  Список всех прокси"
         echo -e "  ${C}3)${NC}  Детали / QR по клиенту"
         echo -e "  ${C}4)${NC}  Статус, трафик и подключения"
@@ -1209,14 +1465,22 @@ main_menu() {
         echo -e "  ${Y}6)${NC}  Обновить секрет (rotate)"
         echo -e "  ${G}7)${NC}  Экспорт всех ссылок в файл"
         echo -e "  ${G}8)${NC}  Миграция на новый сервер"
-        echo -e "  ${C}9)${NC}  Firewall — управление портами"
-        echo -e "  ${M}10)${NC} Healthcheck / Автоперезапуск"
-        echo -e "  ${M}11)${NC} Авто-обновление секрета (cron)"
-        echo -e "  ${M}12)${NC} Уведомления в Telegram"
-        echo -e "  ${B}13)${NC} Обновить скрипт"
-        echo -e "  ${DIM}14)${NC} Просмотр лога"
-        echo -e "  ${R}15)${NC} Удалить прокси"
-        echo -e "  ${R}16)${NC} Полное удаление"
+        echo ""
+        echo -e "  ${W}── Xray SOCKS5 (WhatsApp / универсальный) ──${NC}"
+        echo -e "  ${M}9)${NC}  Меню Xray SOCKS5"
+        echo ""
+        echo -e "  ${W}── Установить всё сразу ──${NC}"
+        echo -e "  ${G}10)${NC} Установить Telegram + Xray"
+        echo ""
+        echo -e "  ${W}── Система ──${NC}"
+        echo -e "  ${C}11)${NC} Firewall — управление портами"
+        echo -e "  ${M}12)${NC} Healthcheck / Автоперезапуск"
+        echo -e "  ${M}13)${NC} Авто-обновление секрета (cron)"
+        echo -e "  ${M}14)${NC} Уведомления в Telegram"
+        echo -e "  ${B}15)${NC} Обновить скрипт"
+        echo -e "  ${DIM}16)${NC} Просмотр лога"
+        echo -e "  ${R}17)${NC} Удалить MTProxy"
+        echo -e "  ${R}18)${NC} Полное удаление"
         echo -e "  ${DIM}0)${NC}  Выход\n"
 
         read -rp "  Пункт: " choice
@@ -1229,14 +1493,16 @@ main_menu() {
             6)  rotate_secret ;;
             7)  export_links ;;
             8)  migrate_export ;;
-            9)  firewall_menu ;;
-            10) setup_healthcheck ;;
-            11) setup_auto_rotate ;;
-            12) setup_tg_notify ;;
-            13) self_update ;;
-            14) show_log ;;
-            15) delete_proxy ;;
-            16) full_uninstall ;;
+            9)  xray_menu ;;
+            10) install_all ;;
+            11) firewall_menu ;;
+            12) setup_healthcheck ;;
+            13) setup_auto_rotate ;;
+            14) setup_tg_notify ;;
+            15) self_update ;;
+            16) show_log ;;
+            17) delete_proxy ;;
+            18) full_uninstall ;;
             0)  echo -e "${DIM}Выход.${NC}"; exit 0 ;;
             *)  warn "Неверный ввод." ;;
         esac

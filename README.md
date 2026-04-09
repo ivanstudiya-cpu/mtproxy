@@ -1,90 +1,59 @@
-# 🔒 MTProxy Manager — Telegram MTProxy с Fake TLS
+<div align="center">
 
-![version](https://img.shields.io/badge/version-3.0-blue)
-![bash](https://img.shields.io/badge/bash-5.0+-green)
-![docker](https://img.shields.io/badge/docker-required-blue)
-![license](https://img.shields.io/badge/license-MIT-brightgreen)
-![platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian%20%7C%20CentOS-lightgrey)
+# 🔒 Messenger Proxy Manager
 
-> Bash-скрипт для быстрого развёртывания и управления MTProxy серверами для Telegram с маскировкой трафика под HTTPS (Fake TLS). Работает через Docker, устанавливается за одну команду.
+### Telegram MTProxy с Fake TLS + Xray SOCKS5 для WhatsApp
+### Всё в одном bash-скрипте. Работает за 1 минуту.
+
+[![Version](https://img.shields.io/badge/version-4.0-blue?style=for-the-badge)](https://github.com/ivanstudiya-cpu/mtproxy/releases)
+[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
+[![Docker](https://img.shields.io/badge/docker-required-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
+[![Stars](https://img.shields.io/github/stars/ivanstudiya-cpu/mtproxy?style=for-the-badge&color=yellow)](https://github.com/ivanstudiya-cpu/mtproxy/stargazers)
+
+**[🇷🇺 Русский](#-быстрая-установка) | [📖 Документация](#-возможности) | [⭐ Поставить звезду](https://github.com/ivanstudiya-cpu/mtproxy)**
+
+</div>
 
 ---
 
-## 📋 Changelog
+## 🚀 Зачем это нужно?
 
-### v3.0
-- Добавлена таблица статусов портов перед выбором (процесс + firewall + прокси)
-- Автооткрытие порта в firewall при выборе закрытого
-- Порт 1080 (SOCKS) в списке выбора
-- Уведомления в Telegram (бот пишет когда прокси упал/восстановился)
-- Healthcheck через cron — автоперезапуск упавших контейнеров каждые 5 минут
-- Авто-обновление секрета по расписанию (раз в неделю или месяц)
-- Экспорт всех ссылок в файл одной командой
-- Миграция на новый сервер — генерация готового bash-скрипта
-- Firewall-помощник (UFW / firewalld / iptables)
-- Авто-обновление скрипта с GitHub
-- Статистика подключений по каждому прокси
+> Telegram заблокирован у провайдера? WhatsApp не работает? Этот скрипт поднимает прокси на твоём VPS за **60 секунд** и обходит любые блокировки.
 
-### v2.0
-- Rotate Secret с автобэкапом
-- Автобэкапы перед любым деструктивным действием
-- Лог всех действий в `/var/log/mtproxy.log`
-- QR-коды для tg:// и https://t.me/proxy
-- Start / Stop / Restart без ввода имён вручную
-- Поддержка apt / yum / dnf
-- 64 домена по категориям (российские и международные)
-
-### v1.0
-- Базовое создание MTProxy с Fake TLS через Docker
-- Список прокси с QR-кодами
+```
+✅ Telegram MTProxy  — встроен в Telegram, не нужен VPN
+✅ Xray SOCKS5       — для WhatsApp, Instagram, браузера
+✅ Fake TLS          — трафик выглядит как обычный HTTPS
+✅ Docker            — изолированно, надёжно, легко удалить
+✅ Один скрипт       — установка, управление, мониторинг
+```
 
 ---
 
 ## ⚡ Быстрая установка
 
 ```bash
-wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh && chmod +x mtproxy.sh && sudo ./mtproxy.sh
+wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh \
+  && chmod +x mtproxy.sh \
+  && sudo ./mtproxy.sh
 ```
 
-После установки скрипт доступен глобально как команда `mtproxy`.
+> После установки скрипт доступен глобально: просто пиши `mtproxy` в терминале
+
+**Требования:** VPS с Linux (Ubuntu/Debian/CentOS) + root-доступ. Docker установится сам.
 
 ---
 
-## 🎯 Возможности
-
-### Основные
-- **Fake TLS маскировка** — трафик выглядит как обычный HTTPS к реальному сайту. Провайдер не определяет прокси.
-- **64 домена** для маскировки (российские и международные) по категориям + ввод своего.
-- **QR-коды** — сразу два: `tg://` и `https://t.me/proxy` прямо в терминале.
-- **Авто-установка зависимостей** — Docker, qrencode, jq ставятся сами.
-
-### Безопасность и надёжность
-- **Rotate Secret** — обновление секрета без пересоздания клиента вручную. Старый конфиг бэкапится автоматически.
-- **Healthcheck (cron)** — каждые 5 минут проверяет что контейнеры живые и перезапускает упавшие.
-- **Авто-обновление секрета** — cron-задача обновляет секреты по расписанию (раз в неделю или месяц).
-- **Auto-backup** — перед каждым деструктивным действием конфиг сохраняется в `/etc/mtproxy/backups/`.
-- **Защита от случайного удаления** — полный снос требует ввода слова `DELETE`.
-
-### Мониторинг
-- **Статистика подключений** — количество активных соединений по каждому прокси.
-- **Сетевой трафик** — CPU, память, NetIO по каждому контейнеру.
-- **Лог всех действий** — каждое действие пишется в `/var/log/mtproxy.log` с таймстампом.
-
-### Уведомления
-- **Telegram-бот уведомления** — пишет тебе в личку когда прокси упал и когда восстановился. Настраивается через @BotFather за 2 минуты.
-
-### Удобство
-- **Firewall-помощник** — автоматически открывает/закрывает нужный порт в UFW / firewalld / iptables.
-- **Экспорт всех ссылок** — одна команда сохраняет все `tg://` и `https://` ссылки в файл.
-- **Миграция на новый сервер** — генерирует готовый bash-скрипт для переноса всех прокси одной командой.
-- **Авто-обновление скрипта** — проверяет GitHub и обновляется до новой версии.
-
----
-
-## 📋 Меню управления
+## 🖥️ Как выглядит
 
 ```
-  1)  Добавить новый прокси
+  ╔══════════════════════════════════════════════════════╗
+  ║     Messenger Proxy Manager v4.0                    ║
+  ║     Telegram MTProxy + Xray SOCKS5                  ║
+  ╚══════════════════════════════════════════════════════╝
+
+  ── Telegram MTProxy (Fake TLS) ──
+  1)  Добавить новый MTProxy
   2)  Список всех прокси
   3)  Детали / QR по клиенту
   4)  Статус, трафик и подключения
@@ -92,78 +61,208 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
   6)  Обновить секрет (rotate)
   7)  Экспорт всех ссылок в файл
   8)  Миграция на новый сервер
-  9)  Firewall — управление портами
-  10) Healthcheck / Автоперезапуск
-  11) Авто-обновление секрета (cron)
-  12) Уведомления в Telegram
-  13) Обновить скрипт
-  14) Просмотр лога
-  15) Удалить прокси
-  16) Полное удаление
-  0)  Выход
+
+  ── Xray SOCKS5 (WhatsApp / универсальный) ──
+  9)  Меню Xray SOCKS5
+
+  ── Установить всё сразу ──
+  10) Установить Telegram + Xray
+
+  ── Система ──
+  11) Firewall    12) Healthcheck    13) Авто-rotate
+  14) TG-уведомления    15) Обновить скрипт
+```
+
+```
+  Статус портов:
+  ──────────────────────────────────────
+  Порт    Процесс       Firewall          Прокси
+  ──────────────────────────────────────
+  443     занят         открыт            ivan
+  8443    свободен      закрыт
+  3128    свободен      открыт
+  1080    занят         открыт            dows
+  ──────────────────────────────────────
+
+  Выберите порт:
+  1) 443   (рекомендуется — HTTPS)
+  2) 8443
+  3) 3128
+  4) 1080  (SOCKS)
+  5) Свой порт
+```
+
+```
+  ╔══════════════════════════════════════════╗
+  ║      Прокси успешно создан!             ║
+  ╚══════════════════════════════════════════╝
+
+  Клиент:  ivan
+  Домен:   cloudflare.com (Fake TLS)
+  IP:      YOUR_SERVER_IP
+  Порт:    443
+  Secret:  ee677b0daeb1d77040d847...
+
+  tg:// ссылка:
+  tg://proxy?server=YOUR_SERVER_IP&port=443&secret=ee677...
+
+  QR-код:
+  █████████████████████
+  ██ ▄▄▄▄▄ █▀ █▀ ▄▄▄▄▄ ██
+  ██ █   █ ██▄ ▀ █   █ ██
+  ██ █▄▄▄█ █▀▀▄▄ █▄▄▄█ ██
+  ██▄▄▄▄▄▄▄█▄▀ ▀▄▄▄▄▄▄▄██
+  █████████████████████
 ```
 
 ---
 
-## 🌐 Поддерживаемые домены для Fake TLS
+## 🎯 Возможности
 
-64 предустановленных домена по категориям + возможность ввести любой свой.
+### 🔵 Telegram MTProxy (Fake TLS)
+| Фича | Описание |
+|------|----------|
+| **Fake TLS** | Трафик маскируется под HTTPS к реальному сайту |
+| **64 домена** | Google, Cloudflare, VK, Habr, RBC и другие |
+| **QR-коды** | `tg://` и `https://t.me/proxy` прямо в терминале |
+| **Несколько клиентов** | Каждый на своём порту (443, 8443, 1080...) |
+| **Rotate Secret** | Смена секрета без пересоздания прокси |
+| **Автобэкапы** | Перед каждым изменением |
 
-**🌍 Международные (Tech)**
-`google.com` `cloudflare.com` `microsoft.com` `apple.com` `amazon.com` `github.com` `stackoverflow.com` `gitlab.com`
+### 🟣 Xray SOCKS5 (универсальный)
+| Фича | Описание |
+|------|----------|
+| **Все приложения** | WhatsApp, Instagram, браузер, любые мессенджеры |
+| **Авторизация** | Открытый или с логином/паролем |
+| **UDP** | Голосовые звонки WhatsApp работают |
+| **QR-код** | Для быстрого подключения |
 
-**🌍 Международные (СМИ)**
-`wikipedia.org` `bbc.com` `cnn.com` `reuters.com` `nytimes.com` `theguardian.com` `bloomberg.com` `forbes.com`
-
-**🌍 Международные (Развлечения)**
-`netflix.com` `twitch.tv` `discord.com` `zoom.us` `spotify.com` `reddit.com` `medium.com` `tumblr.com`
-
-**🌍 Международные (Образование)**
-`coursera.org` `udemy.com` `khanacademy.org` `edx.org` `duolingo.com` `ted.com` `skillshare.com`
-
-**🇷🇺 Российские (СМИ)**
-`lenta.ru` `rbc.ru` `ria.ru` `kommersant.ru` `vedomosti.ru` `iz.ru` `novayagazeta.ru` `meduza.io`
-
-**🇷🇺 Российские (Tech/IT)**
-`habr.com` `mail.ru` `yandex.ru` `vk.com` `2ch.hk` `pikabu.ru` `4pda.to` `3dnews.ru`
-
-**🇷🇺 Российские (Образование)**
-`stepik.org` `geekbrains.ru` `skillbox.ru` `hexlet.io` `netology.ru` `skillfactory.ru`
-
-**🇷🇺 Российские (Сервисы)**
-`gosuslugi.ru` `sberbank.ru` `tinkoff.ru` `avito.ru` `ozon.ru` `wildberries.ru` `kinopoisk.ru` `ivi.ru`
+### ⚙️ Система
+| Фича | Описание |
+|------|----------|
+| **Healthcheck** | Cron каждые 5 минут — упавший прокси перезапускается сам |
+| **TG уведомления** | Бот пишет когда прокси упал и восстановился |
+| **Авто-rotate** | Секреты обновляются раз в неделю/месяц |
+| **Firewall-помощник** | Автооткрытие портов в UFW/firewalld/iptables |
+| **Таблица портов** | Видно что занято прямо перед выбором |
+| **Экспорт** | Все ссылки в один файл одной командой |
+| **Миграция** | Перенос на новый сервер одной командой |
+| **Авто-обновление** | Скрипт обновляется с GitHub |
 
 ---
 
-## 📁 Структура файлов
+## 📱 Подключение на телефоне
 
+### Telegram (30 секунд)
 ```
-/usr/local/bin/mtproxy            — глобальная команда
-/etc/mtproxy/proxies.conf         — конфиг всех прокси
-/etc/mtproxy/backups/             — автобэкапы
-/etc/mtproxy/healthcheck.sh       — скрипт healthcheck (cron)
-/etc/mtproxy/auto_rotate.sh       — скрипт авто-rotate (cron)
-/etc/mtproxy/notify.conf          — конфиг Telegram-бота
-/etc/mtproxy/export_links.txt     — экспорт ссылок
-/var/log/mtproxy.log              — лог всех действий
+1. Скрипт выдаёт ссылку: tg://proxy?server=IP&port=443&secret=...
+2. Открой ссылку на телефоне
+3. Telegram спросит "Подключиться к прокси?"
+4. Нажми "Подключить" ✅
 ```
+
+Или отсканируй QR-код прямо из терминала.
+
+### WhatsApp через Xray SOCKS5
+```
+Настройки → Хранилище и данные → Прокси
+Тип:    SOCKS5
+Хост:   IP_сервера
+Порт:   1080
+```
+
+### Android (системный — все приложения)
+```
+Настройки → WiFi → Прокси → Вручную
+Хост: IP_сервера  |  Порт: 1080  |  Тип: SOCKS5
+```
+
+---
+
+## 🌐 Домены для Fake TLS
+
+<details>
+<summary>🌍 Международные (32 домена) — нажми чтобы раскрыть</summary>
+
+**Tech:** `google.com` `cloudflare.com` `microsoft.com` `apple.com` `amazon.com` `github.com` `stackoverflow.com` `gitlab.com`
+
+**СМИ:** `wikipedia.org` `bbc.com` `cnn.com` `reuters.com` `nytimes.com` `theguardian.com` `bloomberg.com` `forbes.com`
+
+**Развлечения:** `netflix.com` `twitch.tv` `discord.com` `zoom.us` `spotify.com` `reddit.com` `medium.com` `tumblr.com`
+
+**Образование:** `coursera.org` `udemy.com` `khanacademy.org` `edx.org` `duolingo.com` `ted.com` `skillshare.com`
+
+</details>
+
+<details>
+<summary>🇷🇺 Российские (29 доменов) — нажми чтобы раскрыть</summary>
+
+**СМИ:** `lenta.ru` `rbc.ru` `ria.ru` `kommersant.ru` `vedomosti.ru` `iz.ru` `novayagazeta.ru` `meduza.io`
+
+**Tech/IT:** `habr.com` `mail.ru` `yandex.ru` `vk.com` `2ch.hk` `pikabu.ru` `4pda.to` `3dnews.ru`
+
+**Образование:** `stepik.org` `geekbrains.ru` `skillbox.ru` `hexlet.io` `netology.ru` `skillfactory.ru`
+
+**Сервисы:** `gosuslugi.ru` `sberbank.ru` `tinkoff.ru` `avito.ru` `ozon.ru` `wildberries.ru` `kinopoisk.ru` `ivi.ru`
+
+</details>
 
 ---
 
 ## 🛡 Требования
 
-- Сервер с публичным IP (VPS / выделенный)
-- Linux: Ubuntu 20.04+, Debian 10+, CentOS 7+, Fedora 36+, Rocky/AlmaLinux
-- root-доступ (`sudo`)
-- Открытый порт (443, 8443, 3128 или любой другой)
-- Docker устанавливается автоматически если не установлен
+| | |
+|---|---|
+| **ОС** | Ubuntu 20.04+, Debian 10+, CentOS 7+, Fedora 36+, Rocky/AlmaLinux |
+| **RAM** | от 512MB (1GB+ рекомендуется) |
+| **Docker** | Устанавливается автоматически |
+| **Права** | root / sudo |
+| **Порты** | 443, 8443, 3128, 1080 или любой свой |
 
 ---
 
-## 📝 Лицензия
+## 📋 Changelog
 
-MIT — используйте свободно.
+<details>
+<summary>История версий</summary>
+
+### v4.0 — Xray SOCKS5
+- Добавлен Xray SOCKS5 (WhatsApp / универсальный прокси)
+- Пункт "Установить всё сразу" (Telegram + Xray)
+- Авторизация Xray (открытый / логин+пароль)
+- QR-код для SOCKS5, инструкция по подключению в терминале
+
+### v3.0 — Полная автоматизация
+- Таблица статусов портов с firewall статусом
+- Автооткрытие портов, блокировка занятых
+- TG уведомления, healthcheck, авто-rotate по cron
+- Экспорт ссылок, миграция на новый сервер
+- Авто-обновление скрипта с GitHub
+
+### v2.0 — Управление
+- Rotate Secret с автобэкапом
+- Логи, QR-коды tg:// и https://
+- 64 домена по категориям
+
+### v1.0 — Старт
+- Базовый MTProxy с Fake TLS через Docker
+
+</details>
 
 ---
 
-> Скрипт предназначен для обхода блокировок Telegram в регионах с ограниченным доступом. Используйте ответственно и в соответствии с законодательством вашей страны.
+## 🤝 Помочь проекту
+
+Если скрипт помог — поставь ⭐ на GitHub! Это помогает другим найти проект.
+
+Нашёл баг или есть идея? Открывай [Issue](https://github.com/ivanstudiya-cpu/mtproxy/issues) — разберёмся!
+
+---
+
+<div align="center">
+
+**Сделано с ❤️ для русскоязычного сообщества**
+
+[⭐ Поставить звезду](https://github.com/ivanstudiya-cpu/mtproxy) · [🐛 Сообщить о баге](https://github.com/ivanstudiya-cpu/mtproxy/issues) · [💡 Предложить фичу](https://github.com/ivanstudiya-cpu/mtproxy/issues)
+
+</div>
