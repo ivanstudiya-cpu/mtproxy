@@ -1224,6 +1224,7 @@ xray_install() {
     echo "  4) Свой порт"
     read -rp "  Выбор [1-4]: " xp
     case $xp in
+        1) XRAY_PORT=1080 ;;
         2) XRAY_PORT=3129 ;;
         3) XRAY_PORT=8080 ;;
         4) read -rp "  Порт: " XRAY_PORT
@@ -1233,46 +1234,107 @@ xray_install() {
     info "Выбран порт: $XRAY_PORT"
 
     # Авторизация
-    echo -e "
-${C}Защита паролем:${NC}"
+    echo -e "\n${C}Защита паролем:${NC}"
     echo "  1) Без пароля (открытый)"
     echo "  2) С логином и паролем"
     read -rp "  Выбор [1-2]: " xa
-    
-    local AUTH_BLOCK
+
+    local XRAY_USER="" XRAY_PASS="" XRAY_AUTH_TYPE="noauth"
     if [[ "$xa" == "2" ]]; then
         read -rp "  Логин: " XRAY_USER
         read -rp "  Пароль: " XRAY_PASS
-        AUTH_BLOCK='"auth":"password","accounts":[{"user":"'"$XRAY_USER"'","pass":"'"$XRAY_PASS"'"}]'
+        XRAY_AUTH_TYPE="password"
         info "Авторизация включена: $XRAY_USER"
     else
-        AUTH_BLOCK='"auth":"noauth"'
         info "Открытый доступ (без пароля)"
     fi
 
-    # Генерируем конфиг
+    # Генерируем конфиг раздельно чтобы не было проблем с кавычками в JSON
     mkdir -p "$XRAY_DIR"
-    cat > "$XRAY_DIR/config.json" << XCONF
+    if [[ "$XRAY_AUTH_TYPE" == "password" ]]; then
+        cat > "$XRAY_DIR/config.json" << XCONF
 {
   "log": {"loglevel": "warning"},
   "inbounds": [{
     "port": $XRAY_PORT,
     "protocol": "socks",
-    "settings": {$AUTH_BLOCK, "udp": true},
+    "settings": {
+      "auth": "password",
+      "accounts": [{"user": "$XRAY_USER", "pass": "$XRAY_PASS"}],
+      "udp": true
+    },
     "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
   }],
-  "outbounds": [{
-    "protocol": "freedom",
-    "settings": {}
-  }]
+  "outbounds": [{"protocol": "freedom", "settings": {}}]
 }
 XCONF
+    else
+        cat > "$XRAY_DIR/config.json" << XCONF
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [{
+    "port": $XRAY_PORT,
+    "protocol": "socks",
+    "settings": {
+      "auth": "noauth",
+      "udp": true
+    },
+    "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
+  }],
+  "outbounds": [{"protocol": "freedom", "settings": {}}]
+}
+XCONF
+    fi
 
-    info "Запуск Xray контейнера..."
-    docker run -d         --name xray-proxy         --restart unless-stopped         -p "$XRAY_PORT:$XRAY_PORT"         -v "$XRAY_DIR:/etc/xray"         --log-opt max-size=10m         --log-opt max-file=3         teddysun/xray         xray -config /etc/xray/config.json >/dev/null 2>&1
+    # Проверяем JSON
+    if command -v python3 &>/dev/null; then
+        if ! python3 -c "import json; json.load(open('$XRAY_DIR/config.json'))" 2>/dev/null; then
+            warn "Ошибка в конфиге! Содержимое:"
+            cat "$XRAY_DIR/config.json"
+            die "Конфиг невалидный."
+        fi
+        success "Конфиг Xray валидный."
+    fi
 
-    if [[ $? -ne 0 ]]; then
-        die "Xray контейнер не запустился."
+    info "Загрузка образа Xray..."
+
+    # Пробуем основной образ, при неудаче — fallback
+    local XRAY_IMAGE=""
+    if docker pull ghcr.io/xtls/xray-core:latest >/dev/null 2>&1; then
+        XRAY_IMAGE="ghcr.io/xtls/xray-core:latest"
+        success "Образ загружен: $XRAY_IMAGE"
+    elif docker pull teddysun/xray >/dev/null 2>&1; then
+        XRAY_IMAGE="teddysun/xray"
+        success "Образ загружен: $XRAY_IMAGE"
+    else
+        die "Не удалось загрузить образ Xray. Проверь интернет-соединение."
+    fi
+
+    info "Запуск Xray контейнера на порту $XRAY_PORT..."
+
+    # Для ghcr образа команда запуска немного отличается
+    if [[ "$XRAY_IMAGE" == *"xtls"* ]]; then
+        docker run -d             --name xray-proxy             --restart unless-stopped             -p "$XRAY_PORT:$XRAY_PORT"             -v "$XRAY_DIR:/etc/xray"             --log-opt max-size=10m             --log-opt max-file=3             "$XRAY_IMAGE"             run -config /etc/xray/config.json >/dev/null 2>&1
+    else
+        docker run -d             --name xray-proxy             --restart unless-stopped             -p "$XRAY_PORT:$XRAY_PORT"             -v "$XRAY_DIR:/etc/xray"             --log-opt max-size=10m             --log-opt max-file=3             "$XRAY_IMAGE"             xray -config /etc/xray/config.json >/dev/null 2>&1
+    fi
+
+    local EXIT_CODE=$?
+    if [[ $EXIT_CODE -ne 0 ]]; then
+        echo ""
+        echo -e "${R}Диагностика:${NC}"
+        docker logs xray-proxy 2>&1 | tail -20
+        docker rm xray-proxy >/dev/null 2>&1
+        die "Xray контейнер не запустился. Смотри логи выше."
+    fi
+
+    # Даём секунду на старт и проверяем
+    sleep 2
+    if ! docker ps --format "{{.Names}}" | grep -q "^xray-proxy$"; then
+        echo -e "${R}Контейнер упал сразу после старта:${NC}"
+        docker logs xray-proxy 2>&1 | tail -20
+        docker rm xray-proxy >/dev/null 2>&1
+        die "Xray упал. Проверь конфиг."
     fi
 
     _firewall_open "$XRAY_PORT"
