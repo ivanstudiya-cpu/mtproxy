@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.0
+#  Messenger Proxy Manager v4.1
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.0"
+VERSION="4.1"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.0                    ║
+  ║     Messenger Proxy Manager v4.1                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -109,6 +109,7 @@ install_deps() {
 
     mkdir -p "$CONFIG_DIR" "$BACKUP_DIR" "$XRAY_DIR"
     touch "$CONFIG_FILE" "$LOG_FILE"
+    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 
     if [[ ! -f "$BINARY_PATH" || "$(realpath "$0")" != "$BINARY_PATH" ]]; then
         cp "$0" "$BINARY_PATH"
@@ -138,17 +139,6 @@ port_in_use() {
 # ─── ДОМЕНЫ ─────────────────────────────────────────────────
 
 # Категории: параллельные массивы меток и доменов
-CAT_LABELS=(
-    "[Int] Tech"
-    "[Int] SMI"
-    "[Int] Entertainment"
-    "[Int] Education"
-    "[RU]  SMI"
-    "[RU]  Tech/IT"
-    "[RU]  Education"
-    "[RU]  Services"
-)
-
 CAT_DISPLAY=(
     "Международные (Tech)"
     "Международные (СМИ)"
@@ -627,7 +617,8 @@ rotate_secret() {
         --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}')
     DOMAIN=$(grep "^$CONTAINER|" "$CONFIG_FILE" 2>/dev/null | cut -d'|' -f5 || echo "google.com")
 
-    local BFILE="$BACKUP_DIR/${CONTAINER}_$(date +%Y%m%d_%H%M%S).bak"
+    local BFILE
+    BFILE="$BACKUP_DIR/${CONTAINER}_$(date +%Y%m%d_%H%M%S).bak"
     grep "^$CONTAINER|" "$CONFIG_FILE" > "$BFILE" 2>/dev/null
     success "Резервная копия: $BFILE"
 
@@ -844,7 +835,8 @@ migrate_export() {
     echo -e "${Y}═══ ЭКСПОРТ ДЛЯ МИГРАЦИИ ═══${NC}\n"
     warn "Этот файл содержит все настройки. Скопируй его на новый сервер."
 
-    local MIGRATION_FILE="$CONFIG_DIR/migration_$(date +%Y%m%d_%H%M%S).sh"
+    local MIGRATION_FILE
+    MIGRATION_FILE="$CONFIG_DIR/migration_$(date +%Y%m%d_%H%M%S).sh"
     local IP
     IP=$(get_public_ip)
 
@@ -1098,6 +1090,7 @@ HCEOF
             if [[ ! -f "$NOTIFY_CONF" ]]; then
                 warn "Сначала настрой уведомления (пункт 1)."; pause; return
             fi
+            # shellcheck source=/dev/null
             source "$NOTIFY_CONF"
             RESULT=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
                 -d chat_id="$CHAT_ID" \
@@ -1213,7 +1206,15 @@ xray_install() {
 
     if docker ps -a --format "{{.Names}}" | grep -q "^xray-proxy$"; then
         warn "Xray уже установлен!"
+        echo -e "  Используй меню Xray для управления существующим экземпляром."
         pause; return
+    fi
+
+    # Проверяем что порт не занят
+    if ss -tlnp 2>/dev/null | grep -q ":${XRAY_PORT} "; then
+        warn "Порт $XRAY_PORT уже занят другим процессом!"
+        read -rp "  Принудительно использовать? [y/N] " force
+        [[ "${force,,}" != "y" ]] && { pause; return; }
     fi
 
     # Выбор порта
@@ -1314,9 +1315,25 @@ XCONF
 
     # Для ghcr образа команда запуска немного отличается
     if [[ "$XRAY_IMAGE" == *"xtls"* ]]; then
-        docker run -d             --name xray-proxy             --restart unless-stopped             -p "$XRAY_PORT:$XRAY_PORT"             -v "$XRAY_DIR:/etc/xray"             --log-opt max-size=10m             --log-opt max-file=3             "$XRAY_IMAGE"             run -config /etc/xray/config.json >/dev/null 2>&1
+        docker run -d \
+            --name xray-proxy \
+            --restart unless-stopped \
+            -p "$XRAY_PORT:$XRAY_PORT" \
+            -v "$XRAY_DIR:/etc/xray" \
+            --log-opt max-size=10m \
+            --log-opt max-file=3 \
+            "$XRAY_IMAGE" \
+            run -config /etc/xray/config.json >/dev/null 2>&1
     else
-        docker run -d             --name xray-proxy             --restart unless-stopped             -p "$XRAY_PORT:$XRAY_PORT"             -v "$XRAY_DIR:/etc/xray"             --log-opt max-size=10m             --log-opt max-file=3             "$XRAY_IMAGE"             xray -config /etc/xray/config.json >/dev/null 2>&1
+        docker run -d \
+            --name xray-proxy \
+            --restart unless-stopped \
+            -p "$XRAY_PORT:$XRAY_PORT" \
+            -v "$XRAY_DIR:/etc/xray" \
+            --log-opt max-size=10m \
+            --log-opt max-file=3 \
+            "$XRAY_IMAGE" \
+            xray -config /etc/xray/config.json >/dev/null 2>&1
     fi
 
     local EXIT_CODE=$?
@@ -1513,6 +1530,459 @@ xray_menu() {
     done
 }
 
+
+# ═══════════════════════════════════════════════════════════
+# ─── TELEGRAM БОТ — УПРАВЛЕНИЕ ПРОКСИ ──────────────────────
+# ═══════════════════════════════════════════════════════════
+
+BOT_CONF="$CONFIG_DIR/bot.conf"
+BOT_PID_FILE="$CONFIG_DIR/bot.pid"
+BOT_LOG="$CONFIG_DIR/bot.log"
+
+_bot_send() {
+    local token="$1" chat_id="$2" text="$3"
+    curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+        -d chat_id="$chat_id" \
+        -d text="$text" \
+        -d parse_mode="HTML" \
+        -d disable_web_page_preview="true" >/dev/null 2>&1
+}
+
+_bot_send_photo() {
+    local token="$1" chat_id="$2" photo="$3" caption="$4"
+    curl -s -X POST "https://api.telegram.org/bot${token}/sendPhoto" \
+        -F chat_id="$chat_id" \
+        -F photo="@$photo" \
+        -F caption="$caption" \
+        -F parse_mode="HTML" >/dev/null 2>&1
+}
+
+_bot_get_ip() {
+    curl -s4 --max-time 4 https://api.ipify.org 2>/dev/null || echo "0.0.0.0"
+}
+
+_bot_cmd_help() {
+    local token="$1" chat_id="$2"
+    _bot_send "$token" "$chat_id" "🤖 <b>Proxy Manager Bot</b>
+
+<b>Команды:</b>
+/add имя порт домен — создать прокси
+  Пример: /add ivan 443 cloudflare.com
+
+/delete имя — удалить прокси
+  Пример: /delete ivan
+
+/list — все прокси со ссылками
+
+/status — статус контейнеров
+
+/qr имя — получить QR-код
+
+/restart имя — перезапустить прокси
+
+/help — эта справка"
+}
+
+_bot_cmd_add() {
+    local token="$1" chat_id="$2" args="$3"
+    local client_id port domain
+    client_id=$(echo "$args" | awk '{print $1}')
+    port=$(echo "$args" | awk '{print $2}')
+    domain=$(echo "$args" | awk '{print $3}')
+    port="${port:-443}"
+    domain="${domain:-google.com}"
+
+    # Санитизация — только безопасные символы
+    client_id="${client_id//[^a-zA-Z0-9_-]/}"
+    port="${port//[^0-9]/}"
+    domain="${domain//[^a-zA-Z0-9._-]/}"
+
+    if [[ -z "$client_id" ]]; then
+        _bot_send "$token" "$chat_id" "❌ Пример: /add ivan 443 cloudflare.com"
+        return
+    fi
+
+    # Валидация порта
+    if [[ -z "$port" || "$port" -lt 1 || "$port" -gt 65535 ]] 2>/dev/null; then
+        _bot_send "$token" "$chat_id" "❌ Неверный порт: <code>$port</code>\nДопустимо: 1-65535"
+        return
+    fi
+
+    # Валидация домена
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$ ]]; then
+        _bot_send "$token" "$chat_id" "❌ Неверный домен: <code>$domain</code>"
+        return
+    fi
+
+    # Ограничение длины имени
+    if [[ ${#client_id} -gt 32 ]]; then
+        _bot_send "$token" "$chat_id" "❌ Имя слишком длинное (макс. 32 символа)"
+        return
+    fi
+
+    local container="mtproto-$client_id"
+    if docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        _bot_send "$token" "$chat_id" "⚠️ Клиент <b>$client_id</b> уже существует!"
+        return
+    fi
+
+    _bot_send "$token" "$chat_id" "⏳ Создаю прокси <b>$client_id</b> на порту <b>$port</b>..."
+
+    local secret
+    secret=$(docker run --rm nineseconds/mtg:2 generate-secret --hex "$domain" 2>/dev/null)
+    if [[ -z "$secret" ]]; then
+        _bot_send "$token" "$chat_id" "❌ Ошибка генерации секрета."
+        return
+    fi
+
+    docker run -d \
+        --name "$container" \
+        --restart unless-stopped \
+        -p "${port}:${port}" \
+        --log-opt max-size=10m \
+        --log-opt max-file=3 \
+        nineseconds/mtg:2 \
+        simple-run -n 1.1.1.1 -i prefer-ipv4 "0.0.0.0:${port}" "$secret" >/dev/null 2>&1
+
+    if [[ $? -ne 0 ]]; then
+        _bot_send "$token" "$chat_id" "❌ Контейнер не запустился! Порт $port возможно занят."
+        return
+    fi
+
+    _firewall_open "$port" >/dev/null 2>&1
+    echo "$container|$client_id|$port|$secret|$domain|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG_FILE"
+    log "БОТ: создан прокси $container порт=$port"
+
+    local ip
+    ip=$(_bot_get_ip)
+    local link="tg://proxy?server=${ip}&port=${port}&secret=${secret}"
+    local https_link="https://t.me/proxy?server=${ip}&port=${port}&secret=${secret}"
+
+    _bot_send "$token" "$chat_id" "✅ <b>Прокси создан!</b>
+
+👤 Клиент: <b>$client_id</b>
+🌐 Домен: <code>$domain</code>
+🖥 IP: <code>$ip</code>
+🔌 Порт: <code>$port</code>
+
+🔗 tg://
+<code>$link</code>
+
+🔗 https://
+<code>$https_link</code>"
+
+    local qr_file="/tmp/qr_${client_id}_$$.png"
+    if command -v qrencode &>/dev/null; then
+        qrencode -o "$qr_file" -s 8 "$link" 2>/dev/null
+        [[ -f "$qr_file" ]] && _bot_send_photo "$token" "$chat_id" "$qr_file" "QR для $client_id" && rm -f "$qr_file"
+    fi
+}
+
+_bot_cmd_delete() {
+    local token="$1" chat_id="$2" args="$3"
+    local client_id="${args//[^a-zA-Z0-9_-]/}"
+    local container="mtproto-$client_id"
+
+    if [[ -z "$client_id" ]]; then
+        _bot_send "$token" "$chat_id" "❌ Пример: /delete ivan"
+        return
+    fi
+
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        _bot_send "$token" "$chat_id" "⚠️ Клиент <b>$client_id</b> не найден."
+        return
+    fi
+
+    local port
+    port=$(docker inspect "$container" \
+        --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+
+    mkdir -p "$BACKUP_DIR"
+    grep "^${container}|" "$CONFIG_FILE" > "$BACKUP_DIR/${container}_bot_del_$(date +%Y%m%d).bak" 2>/dev/null
+    docker stop "$container" >/dev/null 2>&1
+    docker rm "$container" >/dev/null 2>&1
+    sed -i "/^${container}|/d" "$CONFIG_FILE"
+    log "БОТ: удалён $container"
+
+    _bot_send "$token" "$chat_id" "🗑 Прокси <b>$client_id</b> (порт $port) удалён."
+}
+
+_bot_cmd_list() {
+    local token="$1" chat_id="$2"
+    mapfile -t containers < <(docker ps -a --format "{{.Names}}" | grep "^mtproto-")
+
+    if [[ ${#containers[@]} -eq 0 ]]; then
+        _bot_send "$token" "$chat_id" "📋 Прокси не найдены."
+        return
+    fi
+
+    local ip
+    ip=$(_bot_get_ip)
+    local msg="📋 <b>Список прокси:</b>"
+
+    for c in "${containers[@]}"; do
+        local status port cmd secret domain
+        status=$(docker inspect --format='{{.State.Status}}' "$c" 2>/dev/null)
+        port=$(docker inspect "$c" \
+            --format='{{range $p,$cc := .HostConfig.PortBindings}}{{(index $cc 0).HostPort}}{{end}}' 2>/dev/null)
+        cmd=$(docker inspect "$c" --format='{{join .Config.Cmd " "}}' 2>/dev/null)
+        secret=$(echo "$cmd" | awk '{print $NF}')
+        domain=$(grep "^${c}|" "$CONFIG_FILE" 2>/dev/null | cut -d'|' -f5 || echo "—")
+        local icon="🔴"
+        [[ "$status" == "running" ]] && icon="🟢"
+        local link="tg://proxy?server=${ip}&port=${port}&secret=${secret}"
+        msg="${msg}
+
+${icon} <b>${c#mtproto-}</b> | порт <code>${port}</code> | ${domain}
+<code>${link}</code>"
+    done
+
+    _bot_send "$token" "$chat_id" "$msg"
+}
+
+_bot_cmd_status() {
+    local token="$1" chat_id="$2"
+    mapfile -t containers < <(docker ps -a --format "{{.Names}}" | grep "^mtproto-")
+    local msg="📊 <b>Статус:</b>"
+
+    if [[ ${#containers[@]} -eq 0 ]]; then
+        msg="${msg}
+Прокси не найдены."
+    else
+        for c in "${containers[@]}"; do
+            local status port
+            status=$(docker inspect --format='{{.State.Status}}' "$c" 2>/dev/null)
+            port=$(docker inspect "$c" \
+                --format='{{range $p,$cc := .HostConfig.PortBindings}}{{(index $cc 0).HostPort}}{{end}}' 2>/dev/null)
+            local icon="🔴"
+            [[ "$status" == "running" ]] && icon="🟢"
+            msg="${msg}
+${icon} <b>${c#mtproto-}</b> | порт <code>${port}</code> | ${status}"
+        done
+    fi
+
+    if docker ps -a --format "{{.Names}}" | grep -q "^xray-proxy$"; then
+        local xs
+        xs=$(docker inspect --format='{{.State.Status}}' xray-proxy 2>/dev/null)
+        local xi="🔴"; [[ "$xs" == "running" ]] && xi="🟢"
+        msg="${msg}
+
+${xi} <b>Xray SOCKS5</b> | ${xs}"
+    fi
+
+    msg="${msg}
+
+🖥 <code>$(_bot_get_ip)</code>"
+    _bot_send "$token" "$chat_id" "$msg"
+}
+
+_bot_cmd_qr() {
+    local token="$1" chat_id="$2" args="$3"
+    local client_id="${args//[^a-zA-Z0-9_-]/}"
+    local container="mtproto-$client_id"
+
+    if [[ -z "$client_id" ]] || ! docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        _bot_send "$token" "$chat_id" "⚠️ Клиент не найден. Пример: /qr ivan"
+        return
+    fi
+
+    local ip port cmd secret
+    ip=$(_bot_get_ip)
+    port=$(docker inspect "$container" \
+        --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+    cmd=$(docker inspect "$container" --format='{{join .Config.Cmd " "}}' 2>/dev/null)
+    secret=$(echo "$cmd" | awk '{print $NF}')
+    local link="tg://proxy?server=${ip}&port=${port}&secret=${secret}"
+    local qr_file="/tmp/qr_${client_id}_$$.png"
+
+    if command -v qrencode &>/dev/null; then
+        qrencode -o "$qr_file" -s 8 "$link" 2>/dev/null
+        _bot_send_photo "$token" "$chat_id" "$qr_file" "🔗 $client_id | порт $port
+$link"
+        rm -f "$qr_file"
+    else
+        _bot_send "$token" "$chat_id" "🔗 <b>$client_id</b>
+<code>$link</code>"
+    fi
+}
+
+_bot_cmd_restart() {
+    local token="$1" chat_id="$2" args="$3"
+    local client_id="${args//[^a-zA-Z0-9_-]/}"
+    local container="mtproto-$client_id"
+
+    if [[ -z "$client_id" ]] || ! docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        _bot_send "$token" "$chat_id" "⚠️ Клиент не найден. Пример: /restart ivan"
+        return
+    fi
+
+    docker restart "$container" >/dev/null 2>&1
+    _bot_send "$token" "$chat_id" "🔄 Прокси <b>$client_id</b> перезапущен."
+    log "БОТ: перезапущен $container"
+}
+
+_bot_parse_updates() {
+    local response="$1"
+    python3 - "$response" << 'PYEOF'
+import sys, json
+try:
+    data = json.loads(sys.argv[1])
+    if not data.get('ok'):
+        sys.exit(0)
+    for u in data.get('result', []):
+        uid = u.get('update_id', 0)
+        msg = u.get('message', {})
+        chat = msg.get('chat', {}).get('id', '')
+        text = msg.get('text', '')
+        if text and chat:
+            print(f"{uid}|||{chat}|||{text}")
+except Exception as e:
+    pass
+PYEOF
+}
+
+_bot_loop() {
+    local token="$1" admin_id="$2"
+    local offset=0
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] БОТ запущен" >> "$BOT_LOG"
+    _bot_send "$token" "$admin_id" "🟢 <b>Proxy Bot запущен!</b>
+Напиши /help для команд."
+
+    while true; do
+        local response
+        response=$(curl -s "https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&limit=5" 2>/dev/null)
+
+        local updates
+        updates=$(_bot_parse_updates "$response")
+
+        if [[ -n "$updates" ]]; then
+            while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                local upd_id chat_id text
+                upd_id=$(echo "$line" | cut -d'|' -f1 | tr -d ' ')
+                chat_id=$(echo "$line" | awk -F'[|][|][|]' '{print $2}')
+                text=$(echo "$line" | awk -F'[|][|][|]' '{print $3}')
+                offset=$((upd_id + 1))
+
+                # Защита — пустой chat_id пропускаем
+                [[ -z "$chat_id" ]] && continue
+
+                if [[ "$chat_id" != "$admin_id" ]]; then
+                    _bot_send "$token" "$chat_id" "⛔ Доступ запрещён."
+                    log "БОТ: отклонён запрос от chat_id=$chat_id"
+                    continue
+                fi
+
+                local cmd args
+                cmd=$(echo "$text" | awk '{print $1}')
+                args=$(echo "$text" | cut -d' ' -f2-)
+                [[ "$args" == "$cmd" ]] && args=""
+
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] $chat_id: $cmd $args" >> "$BOT_LOG"
+
+                case "$cmd" in
+                    /add)          _bot_cmd_add     "$token" "$chat_id" "$args" ;;
+                    /delete)       _bot_cmd_delete  "$token" "$chat_id" "$args" ;;
+                    /list)         _bot_cmd_list    "$token" "$chat_id" ;;
+                    /status)       _bot_cmd_status  "$token" "$chat_id" ;;
+                    /qr)           _bot_cmd_qr      "$token" "$chat_id" "$args" ;;
+                    /restart)      _bot_cmd_restart "$token" "$chat_id" "$args" ;;
+                    /help|/start)  _bot_cmd_help    "$token" "$chat_id" ;;
+                    *)             _bot_send "$token" "$chat_id" "❓ Неизвестная команда. /help" ;;
+                esac
+            done <<< "$updates"
+        fi
+
+        sleep 1
+    done
+}
+
+setup_tg_bot() {
+    banner
+    echo -e "${M}═══ TELEGRAM БОТ УПРАВЛЕНИЯ ═══${NC}\n"
+    echo "Управляй прокси прямо из Telegram:"
+    echo "  /add, /delete, /list, /status, /qr, /restart"
+    echo ""
+    echo -e "  ${G}1)${NC} Настроить и запустить бота"
+    echo -e "  ${C}2)${NC} Статус бота"
+    echo -e "  ${Y}3)${NC} Остановить бота"
+    echo -e "  ${DIM}4)${NC} Лог бота"
+    echo -e "  ${DIM}0)${NC} Назад\n"
+    read -rp "  Пункт: " bc
+
+    case $bc in
+        1)
+            echo ""
+            echo -e "${C}1. Создай бота через @BotFather — получи токен.${NC}"
+            echo -e "${C}2. Свой chat_id узнай через @userinfobot.${NC}\n"
+            read -rp "  Bot Token: " BOT_TOKEN
+            read -rp "  Твой Chat ID: " BOT_ADMIN_ID
+
+            if [[ -z "$BOT_TOKEN" || -z "$BOT_ADMIN_ID" ]]; then
+                warn "Токен и Chat ID обязательны!"; pause; return
+            fi
+
+            local check
+            check=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getMe")
+            if ! echo "$check" | grep -q '"ok":true'; then
+                warn "Неверный токен!"; pause; return
+            fi
+
+            local bot_name
+            bot_name=$(echo "$check" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['username'])" 2>/dev/null)
+            success "Бот найден: @$bot_name"
+
+            cat > "$BOT_CONF" << BOTEOF
+BOT_TOKEN=$BOT_TOKEN
+BOT_ADMIN_ID=$BOT_ADMIN_ID
+BOT_NAME=$bot_name
+BOTEOF
+            chmod 600 "$BOT_CONF"
+
+            # Останавливаем старый
+            if [[ -f "$BOT_PID_FILE" ]]; then
+                kill "$(cat "$BOT_PID_FILE")" 2>/dev/null
+                rm -f "$BOT_PID_FILE"
+            fi
+
+            # Запускаем в фоне
+            _bot_loop "$BOT_TOKEN" "$BOT_ADMIN_ID" &
+            echo $! > "$BOT_PID_FILE"
+
+            success "Бот @$bot_name запущен (PID: $(cat "$BOT_PID_FILE"))!"
+            echo -e "\n${C}Напиши /help боту в Telegram.${NC}"
+            log "TG бот запущен: @$bot_name PID=$(cat "$BOT_PID_FILE")"
+            ;;
+        2)
+            echo ""
+            if [[ -f "$BOT_PID_FILE" ]] && kill -0 "$(cat "$BOT_PID_FILE")" 2>/dev/null; then
+                # shellcheck disable=SC1090
+                source "$BOT_CONF" 2>/dev/null
+                success "Бот работает | PID: $(cat "$BOT_PID_FILE") | @${BOT_NAME:-unknown}"
+            else
+                warn "Бот не запущен."
+            fi
+            ;;
+        3)
+            if [[ -f "$BOT_PID_FILE" ]]; then
+                kill "$(cat "$BOT_PID_FILE")" 2>/dev/null
+                rm -f "$BOT_PID_FILE"
+                success "Бот остановлен."
+                log "TG бот остановлен"
+            else
+                warn "Бот не запущен."
+            fi
+            ;;
+        4)
+            echo ""
+            tail -30 "$BOT_LOG" 2>/dev/null || warn "Лог пуст."
+            ;;
+    esac
+    pause
+}
+
+
 # ─── ГЛАВНОЕ МЕНЮ ───────────────────────────────────────────
 
 main_menu() {
@@ -1533,6 +2003,9 @@ main_menu() {
         echo ""
         echo -e "  ${W}── Установить всё сразу ──${NC}"
         echo -e "  ${G}10)${NC} Установить Telegram + Xray"
+        echo ""
+        echo -e "  ${W}── Telegram Бот ──${NC}"
+        echo -e "  ${M}19)${NC} Бот управления (add/delete/list/qr)"
         echo ""
         echo -e "  ${W}── Система ──${NC}"
         echo -e "  ${C}11)${NC} Firewall — управление портами"
@@ -1565,6 +2038,7 @@ main_menu() {
             16) show_log ;;
             17) delete_proxy ;;
             18) full_uninstall ;;
+            19) setup_tg_bot ;;
             0)  echo -e "${DIM}Выход.${NC}"; exit 0 ;;
             *)  warn "Неверный ввод." ;;
         esac
