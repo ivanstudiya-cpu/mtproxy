@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.1
+#  Messenger Proxy Manager v4.2
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.1"
+VERSION="4.2"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.1                    ║
+  ║     Messenger Proxy Manager v4.2                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -400,7 +400,7 @@ menu_add() {
             -i prefer-ipv4 \
             0.0.0.0:"$CHOSEN_PORT" "$SECRET" >/dev/null 2>&1
 
-    if [[ $? -ne 0 ]]; then
+    if ! docker ps --format "{{.Names}}" | grep -q "^$CONTAINER_NAME$"; then
         die "Контейнер не запустился."
     fi
 
@@ -491,7 +491,11 @@ firewall_menu() {
             local PORT
             PORT=$(docker inspect "$CONTAINER" \
                 --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
-            [[ $fc -eq 1 ]] && _firewall_open "$PORT" || _firewall_close "$PORT"
+            if [[ $fc -eq 1 ]]; then
+                _firewall_open "$PORT"
+            else
+                _firewall_close "$PORT"
+            fi
             ;;
         3)
             if command -v ufw &>/dev/null; then ufw status numbered
@@ -696,7 +700,7 @@ _show_connections() {
         else
             # Fallback — считаем через ss
             local ACTIVE
-            ACTIVE=$(ss -tn | grep ":$PORT " | grep ESTAB | wc -l)
+            ACTIVE=$(ss -tn | grep -c ":$PORT .*ESTAB" || echo 0)
             echo -e "  ${W}$CONTAINER${NC}: ${G}$ACTIVE${NC} активных соединений (ESTAB)"
         fi
     done
@@ -1181,7 +1185,12 @@ full_uninstall() {
 
     local ids
     ids=$(docker ps -aq --filter "name=mtproto-")
-    [[ -n "$ids" ]] && docker stop $ids >/dev/null 2>&1 && docker rm $ids >/dev/null 2>&1
+    if [[ -n "$ids" ]]; then
+        # shellcheck disable=SC2086
+        docker stop $ids >/dev/null 2>&1
+        # shellcheck disable=SC2086
+        docker rm $ids >/dev/null 2>&1
+    fi
 
     crontab -l 2>/dev/null | grep -v "$CRON_TAG" | grep -v "auto_rotate" | crontab -
     rm -f "$BINARY_PATH"
@@ -1204,17 +1213,12 @@ xray_install() {
     echo "браузера и любых других приложений."
     echo ""
 
+    local XRAY_PORT XRAY_HTTP_PORT xp xa
+
     if docker ps -a --format "{{.Names}}" | grep -q "^xray-proxy$"; then
         warn "Xray уже установлен!"
         echo -e "  Используй меню Xray для управления существующим экземпляром."
         pause; return
-    fi
-
-    # Проверяем что порт не занят
-    if ss -tlnp 2>/dev/null | grep -q ":${XRAY_PORT} "; then
-        warn "Порт $XRAY_PORT уже занят другим процессом!"
-        read -rp "  Принудительно использовать? [y/N] " force
-        [[ "${force,,}" != "y" ]] && { pause; return; }
     fi
 
     # Выбор порта
@@ -1235,6 +1239,15 @@ xray_install() {
     info "Выбран порт: $XRAY_PORT"
     # HTTP прокси будет на следующем порту (для WhatsApp)
     XRAY_HTTP_PORT=$((XRAY_PORT + 1))
+
+    # Проверяем что порты не заняты
+    for check_port in "$XRAY_PORT" "$XRAY_HTTP_PORT"; do
+        if ss -tlnp 2>/dev/null | grep -q ":${check_port} "; then
+            warn "Порт $check_port уже занят!"
+            read -rp "  Принудительно использовать? [y/N] " force
+            [[ "${force,,}" != "y" ]] && { pause; return; }
+        fi
+    done
     info "HTTP прокси (WhatsApp): порт $XRAY_HTTP_PORT"
 
     # Авторизация
@@ -1364,8 +1377,7 @@ XCONF
             xray -config /etc/xray/config.json >/dev/null 2>&1
     fi
 
-    local EXIT_CODE=$?
-    if [[ $EXIT_CODE -ne 0 ]]; then
+    if ! docker ps --format "{{.Names}}" | grep -q "^xray-proxy$" 2>/dev/null; then
         echo ""
         echo -e "${R}Диагностика:${NC}"
         docker logs xray-proxy 2>&1 | tail -20
@@ -1383,6 +1395,7 @@ XCONF
     fi
 
     _firewall_open "$XRAY_PORT"
+    _firewall_open "$XRAY_HTTP_PORT"
 
     local IP
     IP=$(get_public_ip)
@@ -1445,15 +1458,22 @@ xray_status() {
     echo -e "  ${W}Протокол:${NC} SOCKS5"
 
     if [[ -f "$CONFIG_DIR/xray.conf" ]]; then
-        local XUSER XPASS
-        XUSER=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
-        XPASS=$(cut -d'|' -f3 "$CONFIG_DIR/xray.conf")
+        local XHTTP_PORT XUSER XPASS
+        XHTTP_PORT=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
+        XUSER=$(cut -d'|' -f3 "$CONFIG_DIR/xray.conf")
+        XPASS=$(cut -d'|' -f4 "$CONFIG_DIR/xray.conf")
+        [[ -n "$XHTTP_PORT" ]] && echo -e "  ${W}HTTP порт:${NC} $XHTTP_PORT  ${DIM}(для WhatsApp)${NC}"
         [[ -n "$XUSER" ]] && echo -e "  ${W}Логин:${NC}    $XUSER"
         [[ -n "$XPASS" ]] && echo -e "  ${W}Пароль:${NC}   $XPASS"
     fi
 
     echo -e "
-  ${W}SOCKS5 адрес:${NC} ${B}$IP:$PORT${NC}"
+  ${W}SOCKS5:${NC} ${B}$IP:$PORT${NC}  ${DIM}(браузер, система)${NC}"
+    if [[ -f "$CONFIG_DIR/xray.conf" ]]; then
+        local http_p
+        http_p=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
+        [[ -n "$http_p" ]] && echo -e "  ${W}HTTP:${NC}   ${B}$IP:$http_p${NC}  ${DIM}(WhatsApp, Instagram)${NC}"
+    fi
     echo ""
     echo -e "${C}  Трафик:${NC}"
     docker stats --no-stream --format "  CPU: {{.CPUPerc}}  RAM: {{.MemUsage}}  NET: {{.NetIO}}" xray-proxy 2>/dev/null
@@ -1509,8 +1529,18 @@ xray_delete() {
     docker rm xray-proxy >/dev/null 2>&1
     rm -f "$CONFIG_DIR/xray.conf"
 
-    read -rp "  Закрыть порт $PORT в firewall? [y/N] " fw
-    [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
+    if [[ -f "$CONFIG_DIR/xray.conf" ]]; then
+        local http_port
+        http_port=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
+        read -rp "  Закрыть порты $PORT и $http_port в firewall? [y/N] " fw
+        if [[ "${fw,,}" == "y" ]]; then
+            _firewall_close "$PORT"
+            [[ -n "$http_port" ]] && _firewall_close "$http_port"
+        fi
+    else
+        read -rp "  Закрыть порт $PORT в firewall? [y/N] " fw
+        [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
+    fi
 
     success "Xray удалён."
     log "Xray удалён"
@@ -1672,7 +1702,7 @@ _bot_cmd_add() {
         nineseconds/mtg:2 \
         simple-run -n 1.1.1.1 -i prefer-ipv4 "0.0.0.0:${port}" "$secret" >/dev/null 2>&1
 
-    if [[ $? -ne 0 ]]; then
+    if ! docker ps --format "{{.Names}}" | grep -q "^${container}$"; then
         _bot_send "$token" "$chat_id" "❌ Контейнер не запустился! Порт $port возможно занят."
         return
     fi
