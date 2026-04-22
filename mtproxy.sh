@@ -1233,6 +1233,9 @@ xray_install() {
         *) XRAY_PORT=1080 ;;
     esac
     info "Выбран порт: $XRAY_PORT"
+    # HTTP прокси будет на следующем порту (для WhatsApp)
+    XRAY_HTTP_PORT=$((XRAY_PORT + 1))
+    info "HTTP прокси (WhatsApp): порт $XRAY_HTTP_PORT"
 
     # Авторизация
     echo -e "\n${C}Защита паролем:${NC}"
@@ -1256,16 +1259,28 @@ xray_install() {
         cat > "$XRAY_DIR/config.json" << XCONF
 {
   "log": {"loglevel": "warning"},
-  "inbounds": [{
-    "port": $XRAY_PORT,
-    "protocol": "socks",
-    "settings": {
-      "auth": "password",
-      "accounts": [{"user": "$XRAY_USER", "pass": "$XRAY_PASS"}],
-      "udp": true
+  "inbounds": [
+    {
+      "port": $XRAY_PORT,
+      "protocol": "socks",
+      "tag": "socks-in",
+      "settings": {
+        "auth": "password",
+        "accounts": [{"user": "$XRAY_USER", "pass": "$XRAY_PASS"}],
+        "udp": true
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
     },
-    "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
-  }],
+    {
+      "port": $XRAY_HTTP_PORT,
+      "protocol": "http",
+      "tag": "http-in",
+      "settings": {
+        "accounts": [{"user": "$XRAY_USER", "pass": "$XRAY_PASS"}],
+        "allowTransparent": false
+      }
+    }
+  ],
   "outbounds": [{"protocol": "freedom", "settings": {}}]
 }
 XCONF
@@ -1273,15 +1288,26 @@ XCONF
         cat > "$XRAY_DIR/config.json" << XCONF
 {
   "log": {"loglevel": "warning"},
-  "inbounds": [{
-    "port": $XRAY_PORT,
-    "protocol": "socks",
-    "settings": {
-      "auth": "noauth",
-      "udp": true
+  "inbounds": [
+    {
+      "port": $XRAY_PORT,
+      "protocol": "socks",
+      "tag": "socks-in",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
     },
-    "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
-  }],
+    {
+      "port": $XRAY_HTTP_PORT,
+      "protocol": "http",
+      "tag": "http-in",
+      "settings": {
+        "allowTransparent": false
+      }
+    }
+  ],
   "outbounds": [{"protocol": "freedom", "settings": {}}]
 }
 XCONF
@@ -1319,6 +1345,7 @@ XCONF
             --name xray-proxy \
             --restart unless-stopped \
             -p "$XRAY_PORT:$XRAY_PORT" \
+            -p "$XRAY_HTTP_PORT:$XRAY_HTTP_PORT" \
             -v "$XRAY_DIR:/etc/xray" \
             --log-opt max-size=10m \
             --log-opt max-file=3 \
@@ -1329,6 +1356,7 @@ XCONF
             --name xray-proxy \
             --restart unless-stopped \
             -p "$XRAY_PORT:$XRAY_PORT" \
+            -p "$XRAY_HTTP_PORT:$XRAY_HTTP_PORT" \
             -v "$XRAY_DIR:/etc/xray" \
             --log-opt max-size=10m \
             --log-opt max-file=3 \
@@ -1359,7 +1387,7 @@ XCONF
     local IP
     IP=$(get_public_ip)
 
-    echo "$XRAY_PORT|$XRAY_USER|$XRAY_PASS|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
+    echo "$XRAY_PORT|$XRAY_HTTP_PORT|$XRAY_USER|$XRAY_PASS|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
     log "Xray установлен: порт=$XRAY_PORT"
 
     clear
