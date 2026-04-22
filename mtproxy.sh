@@ -1550,25 +1550,30 @@ xray_delete() {
     read -rp "  Удалить Xray SOCKS5? [y/N] " confirm
     [[ "${confirm,,}" != "y" ]] && return
 
-    local PORT
-    PORT=$(docker inspect xray-proxy \
-        --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+    # Читаем порты ДО удаления контейнера и конфига
+    local SOCKS_PORT HTTP_PORT
+    SOCKS_PORT=$(cut -d'|' -f1 "$CONFIG_DIR/xray.conf" 2>/dev/null)
+    HTTP_PORT=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf" 2>/dev/null)
+
+    # Если конфига нет — берём порт из docker inspect (только первый)
+    if [[ -z "$SOCKS_PORT" ]]; then
+        SOCKS_PORT=$(docker inspect xray-proxy             --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}} {{end}}'             2>/dev/null | awk '{print $1}')
+    fi
 
     docker stop xray-proxy >/dev/null 2>&1
     docker rm xray-proxy >/dev/null 2>&1
     rm -f "$CONFIG_DIR/xray.conf"
 
-    if [[ -f "$CONFIG_DIR/xray.conf" ]]; then
-        local http_port
-        http_port=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
-        read -rp "  Закрыть порты $PORT и $http_port в firewall? [y/N] " fw
+    # Закрываем порты в firewall
+    if [[ -n "$HTTP_PORT" ]]; then
+        read -rp "  Закрыть порты $SOCKS_PORT и $HTTP_PORT в firewall? [y/N] " fw
         if [[ "${fw,,}" == "y" ]]; then
-            _firewall_close "$PORT"
-            [[ -n "$http_port" ]] && _firewall_close "$http_port"
+            _firewall_close "$SOCKS_PORT"
+            _firewall_close "$HTTP_PORT"
         fi
-    else
-        read -rp "  Закрыть порт $PORT в firewall? [y/N] " fw
-        [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
+    elif [[ -n "$SOCKS_PORT" ]]; then
+        read -rp "  Закрыть порт $SOCKS_PORT в firewall? [y/N] " fw
+        [[ "${fw,,}" == "y" ]] && _firewall_close "$SOCKS_PORT"
     fi
 
     success "Xray удалён."
