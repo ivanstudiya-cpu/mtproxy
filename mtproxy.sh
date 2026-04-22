@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.2
+#  Messenger Proxy Manager v4.3
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.2"
+VERSION="4.3"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.2                    ║
+  ║     Messenger Proxy Manager v4.3                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -1272,56 +1272,72 @@ xray_install() {
         cat > "$XRAY_DIR/config.json" << XCONF
 {
   "log": {"loglevel": "warning"},
+  "dns": {"servers": ["8.8.8.8", "1.1.1.1", "8.8.4.4"]},
   "inbounds": [
     {
       "port": $XRAY_PORT,
+      "listen": "0.0.0.0",
       "protocol": "socks",
       "tag": "socks-in",
       "settings": {
         "auth": "password",
         "accounts": [{"user": "$XRAY_USER", "pass": "$XRAY_PASS"}],
-        "udp": true
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
+        "udp": true,
+        "ip": "0.0.0.0"
+      }
     },
     {
       "port": $XRAY_HTTP_PORT,
+      "listen": "0.0.0.0",
       "protocol": "http",
       "tag": "http-in",
       "settings": {
         "accounts": [{"user": "$XRAY_USER", "pass": "$XRAY_PASS"}],
-        "allowTransparent": false
+        "allowTransparent": true
       }
     }
   ],
-  "outbounds": [{"protocol": "freedom", "settings": {}}]
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {"domainStrategy": "UseIP"}
+    }
+  ]
 }
 XCONF
     else
         cat > "$XRAY_DIR/config.json" << XCONF
 {
   "log": {"loglevel": "warning"},
+  "dns": {"servers": ["8.8.8.8", "1.1.1.1", "8.8.4.4"]},
   "inbounds": [
     {
       "port": $XRAY_PORT,
+      "listen": "0.0.0.0",
       "protocol": "socks",
       "tag": "socks-in",
       "settings": {
         "auth": "noauth",
-        "udp": true
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http","tls"]}
+        "udp": true,
+        "ip": "0.0.0.0"
+      }
     },
     {
       "port": $XRAY_HTTP_PORT,
+      "listen": "0.0.0.0",
       "protocol": "http",
       "tag": "http-in",
       "settings": {
-        "allowTransparent": false
+        "allowTransparent": true
       }
     }
   ],
-  "outbounds": [{"protocol": "freedom", "settings": {}}]
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {"domainStrategy": "UseIP"}
+    }
+  ]
 }
 XCONF
     fi
