@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.3
+#  Messenger Proxy Manager v4.4
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.3"
+VERSION="4.4"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.3                    ║
+  ║     Messenger Proxy Manager v4.4                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -132,9 +132,6 @@ get_public_ip() {
     echo "0.0.0.0"
 }
 
-port_in_use() {
-    ss -tlnp | grep -q ":$1 "
-}
 
 # ─── ДОМЕНЫ ─────────────────────────────────────────────────
 
@@ -562,6 +559,7 @@ show_list() {
 show_detail() {
     banner
     read -rp "ID клиента: " CLIENT_ID
+    CLIENT_ID="${CLIENT_ID//[^a-zA-Z0-9_-]/}"
     local CONTAINER="mtproto-$CLIENT_ID"
 
     if ! docker ps -a --format "{{.Names}}" | grep -q "^$CONTAINER$"; then
@@ -610,6 +608,7 @@ rotate_secret() {
     warn "Все текущие соединения будут разорваны."
     echo ""
     read -rp "ID клиента: " CLIENT_ID
+    CLIENT_ID="${CLIENT_ID//[^a-zA-Z0-9_-]/}"
     local CONTAINER="mtproto-$CLIENT_ID"
 
     if ! docker ps -a --format "{{.Names}}" | grep -q "^$CONTAINER$"; then
@@ -1243,9 +1242,21 @@ xray_install() {
     # Проверяем что порты не заняты
     for check_port in "$XRAY_PORT" "$XRAY_HTTP_PORT"; do
         if ss -tlnp 2>/dev/null | grep -q ":${check_port} "; then
-            warn "Порт $check_port уже занят!"
+            warn "Порт $check_port уже занят другим процессом!"
             read -rp "  Принудительно использовать? [y/N] " force
             [[ "${force,,}" != "y" ]] && { pause; return; }
+        fi
+    done
+
+    # Проверяем что HTTP порт не совпадает с существующим MTProxy
+    mapfile -t _existing < <(docker ps --format "{{.Names}}" | grep "^mtproto-")
+    for _c in "${_existing[@]}"; do
+        local _cp
+        _cp=$(docker inspect "$_c"             --format='{{range $p,$cc := .HostConfig.PortBindings}}{{(index $cc 0).HostPort}}{{end}}' 2>/dev/null)
+        if [[ "$_cp" == "$XRAY_HTTP_PORT" ]]; then
+            warn "HTTP порт $XRAY_HTTP_PORT занят MTProxy контейнером $_c!"
+            warn "Выбери другой SOCKS5 порт (HTTP будет на SOCKS5+1)"
+            pause; return
         fi
     done
     info "HTTP прокси (WhatsApp): порт $XRAY_HTTP_PORT"
@@ -1462,7 +1473,8 @@ xray_status() {
 
     local STATUS IP PORT
     STATUS=$(docker inspect --format='{{.State.Status}}' xray-proxy 2>/dev/null)
-    PORT=$(docker inspect xray-proxy         --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+    PORT=$(docker inspect xray-proxy \
+        --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
     IP=$(get_public_ip)
 
     local COLOR="${R}"
@@ -1539,7 +1551,8 @@ xray_delete() {
     [[ "${confirm,,}" != "y" ]] && return
 
     local PORT
-    PORT=$(docker inspect xray-proxy         --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
+    PORT=$(docker inspect xray-proxy \
+        --format='{{range $p,$c := .HostConfig.PortBindings}}{{(index $c 0).HostPort}}{{end}}' 2>/dev/null)
 
     docker stop xray-proxy >/dev/null 2>&1
     docker rm xray-proxy >/dev/null 2>&1
@@ -1718,6 +1731,7 @@ _bot_cmd_add() {
         nineseconds/mtg:2 \
         simple-run -n 1.1.1.1 -i prefer-ipv4 "0.0.0.0:${port}" "$secret" >/dev/null 2>&1
 
+    sleep 2
     if ! docker ps --format "{{.Names}}" | grep -q "^${container}$"; then
         _bot_send "$token" "$chat_id" "❌ Контейнер не запустился! Порт $port возможно занят."
         return
