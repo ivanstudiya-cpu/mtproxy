@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.5
+#  Messenger Proxy Manager v4.6
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.5"
+VERSION="4.6"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.5                    ║
+  ║     Messenger Proxy Manager v4.6                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
