@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.6
+#  Messenger Proxy Manager v4.7
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.6"
+VERSION="4.7"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.6                    ║
+  ║     Messenger Proxy Manager v4.7                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -1248,15 +1248,15 @@ xray_install() {
 
     # Выбор порта
     echo -e "${C}Выберите порт для Xray SOCKS5:${NC}"
-    echo "  1) 1080 (стандартный SOCKS5)"
-    echo "  2) 3129"
-    echo "  3) 8080"
+    echo "  1) 8443 (рекомендуется — альтернативный HTTPS)"
+    echo "  2) 8080"
+    echo "  3) 1080 (стандартный SOCKS5)"
     echo "  4) Свой порт"
     read -rp "  Выбор [1-4]: " xp
     case $xp in
-        1) XRAY_PORT=1080 ;;
-        2) XRAY_PORT=3129 ;;
-        3) XRAY_PORT=8080 ;;
+        1) XRAY_PORT=8443 ;;
+        2) XRAY_PORT=8080 ;;
+        3) XRAY_PORT=1080 ;;
         4) read -rp "  Порт: " XRAY_PORT
            [[ "$XRAY_PORT" =~ ^[0-9]+$ ]] || XRAY_PORT=1080 ;;
         *) XRAY_PORT=1080 ;;
