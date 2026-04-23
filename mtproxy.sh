@@ -107,14 +107,23 @@ install_deps() {
         pkg_install curl
     fi
 
+    if ! command -v python3 &>/dev/null; then
+        info "Установка python3..."
+        pkg_install python3
+    fi
+
     mkdir -p "$CONFIG_DIR" "$BACKUP_DIR" "$XRAY_DIR"
     touch "$CONFIG_FILE" "$LOG_FILE"
-    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    chmod 600 "$CONFIG_FILE" "$LOG_FILE" 2>/dev/null || true
 
     if [[ ! -f "$BINARY_PATH" || "$(realpath "$0")" != "$BINARY_PATH" ]]; then
-        cp "$0" "$BINARY_PATH"
-        chmod +x "$BINARY_PATH"
-        success "Команда 'mtproxy' доступна глобально."
+        if [[ -f "$0" && -r "$0" ]]; then
+            cp "$0" "$BINARY_PATH"
+            chmod +x "$BINARY_PATH"
+            success "Команда 'mtproxy' доступна глобально."
+        else
+            warn "Не удалось установить глобальную команду (скрипт запущен через pipe?). Скопируйте файл вручную в $BINARY_PATH"
+        fi
     fi
 }
 
@@ -484,6 +493,9 @@ firewall_menu() {
                 echo -e "  ${Y}$((i+1)))${NC} ${containers[$i]}"
             done
             read -rp "Номер: " IDX
+            if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#containers[@]} ]]; then
+                warn "Неверный номер."; pause; return
+            fi
             local CONTAINER="${containers[$((IDX-1))]}"
             local PORT
             PORT=$(docker inspect "$CONTAINER" \
@@ -722,6 +734,9 @@ manage_proxy() {
 
     echo ""
     read -rp "Номер контейнера: " IDX
+    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#containers[@]} ]]; then
+        warn "Неверный номер."; pause; return
+    fi
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
 
@@ -752,7 +767,10 @@ delete_proxy() {
 
     echo ""
     read -rp "Номер для удаления (0 — отмена): " IDX
-    [[ "$IDX" -eq 0 ]] && return
+    [[ "$IDX" == "0" ]] && return
+    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#containers[@]} ]]; then
+        warn "Неверный номер."; pause; return
+    fi
 
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
@@ -987,7 +1005,7 @@ for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
 
     sed -i "/^$CONTAINER|/d" "$CONFIG"
     echo "$CONTAINER|$CLIENT_ID|$PORT|$NEW_SECRET|$DOMAIN|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTO-ROTATE OK: $CONTAINER, новый секрет: $NEW_SECRET" >> "$LOG"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTO-ROTATE OK: $CONTAINER, секрет обновлён" >> "$LOG"
 done
 AREOF
             chmod +x /etc/mtproxy/auto_rotate.sh
@@ -1050,9 +1068,13 @@ NOTIFY_CONF="/etc/mtproxy/notify.conf"
 
 _tg_send() {
     [[ ! -f "$NOTIFY_CONF" ]] && return
-    source "$NOTIFY_CONF"
-    curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-        -d chat_id="$CHAT_ID" \
+    # Безопасное чтение — без source чтобы исключить выполнение произвольного кода
+    local _token _chat
+    _token=$(grep '^BOT_TOKEN=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
+    _chat=$(grep '^CHAT_ID=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
+    [[ -z "$_token" || -z "$_chat" ]] && return
+    curl -s -X POST "https://api.telegram.org/bot${_token}/sendMessage" \
+        -d chat_id="$_chat" \
         -d text="$1" \
         -d parse_mode="HTML" >/dev/null 2>&1
 }
@@ -1093,8 +1115,12 @@ HCEOF
             if [[ ! -f "$NOTIFY_CONF" ]]; then
                 warn "Сначала настрой уведомления (пункт 1)."; pause; return
             fi
-            # shellcheck source=/dev/null
-            source "$NOTIFY_CONF"
+            local BOT_TOKEN CHAT_ID
+            BOT_TOKEN=$(grep '^BOT_TOKEN=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
+            CHAT_ID=$(grep '^CHAT_ID=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
+            if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+                warn "Неверный формат notify.conf. Пересоздай уведомления (пункт 1)."; pause; return
+            fi
             RESULT=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
                 -d chat_id="$CHAT_ID" \
                 -d text="✅ <b>MTProxy тест!</b>%0AУведомления работают. Сервер: $(hostname)" \
@@ -1427,7 +1453,11 @@ XCONF
     local IP
     IP=$(get_public_ip)
 
-    echo "$XRAY_PORT|$XRAY_HTTP_PORT|$XRAY_USER|$XRAY_PASS|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
+    local _xuser_b64 _xpass_b64
+    _xuser_b64=$(echo -n "$XRAY_USER" | base64)
+    _xpass_b64=$(echo -n "$XRAY_PASS" | base64)
+    echo "$XRAY_PORT|$XRAY_HTTP_PORT|$_xuser_b64|$_xpass_b64|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
+    chmod 600 "$CONFIG_DIR/xray.conf"
     log "Xray установлен: порт=$XRAY_PORT"
 
     clear
@@ -1488,8 +1518,8 @@ xray_status() {
     if [[ -f "$CONFIG_DIR/xray.conf" ]]; then
         local XHTTP_PORT XUSER XPASS
         XHTTP_PORT=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
-        XUSER=$(cut -d'|' -f3 "$CONFIG_DIR/xray.conf")
-        XPASS=$(cut -d'|' -f4 "$CONFIG_DIR/xray.conf")
+        XUSER=$(cut -d'|' -f3 "$CONFIG_DIR/xray.conf" | base64 -d 2>/dev/null)
+        XPASS=$(cut -d'|' -f4 "$CONFIG_DIR/xray.conf" | base64 -d 2>/dev/null)
         [[ -n "$XHTTP_PORT" ]] && echo -e "  ${W}HTTP порт:${NC} $XHTTP_PORT  ${DIM}(для WhatsApp)${NC}"
         [[ -n "$XUSER" ]] && echo -e "  ${W}Логин:${NC}    $XUSER"
         [[ -n "$XPASS" ]] && echo -e "  ${W}Пароль:${NC}   $XPASS"
@@ -1937,6 +1967,7 @@ PYEOF
 _bot_loop() {
     local token="$1" admin_id="$2"
     local offset=0
+    local backoff=1
 
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] БОТ запущен" >> "$BOT_LOG"
     _bot_send "$token" "$admin_id" "🟢 <b>Proxy Bot запущен!</b>
@@ -1944,7 +1975,16 @@ _bot_loop() {
 
     while true; do
         local response
-        response=$(curl -s "https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&limit=5" 2>/dev/null)
+        response=$(curl -s --max-time 30 "https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&limit=5" 2>/dev/null)
+
+        # Если ответ пустой или невалидный — exponential backoff (макс 60 сек)
+        if [[ -z "$response" ]] || ! echo "$response" | grep -q '"ok"'; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] БОТ: ошибка сети, пауза ${backoff}с" >> "$BOT_LOG"
+            sleep "$backoff"
+            backoff=$(( backoff < 60 ? backoff * 2 : 60 ))
+            continue
+        fi
+        backoff=1
 
         local updates
         updates=$(_bot_parse_updates "$response")
@@ -2050,9 +2090,9 @@ BOTEOF
         2)
             echo ""
             if [[ -f "$BOT_PID_FILE" ]] && kill -0 "$(cat "$BOT_PID_FILE")" 2>/dev/null; then
-                # shellcheck disable=SC1090
-                source "$BOT_CONF" 2>/dev/null
-                success "Бот работает | PID: $(cat "$BOT_PID_FILE") | @${BOT_NAME:-unknown}"
+                local _bot_name
+                _bot_name=$(grep '^BOT_NAME=' "$BOT_CONF" 2>/dev/null | head -1 | cut -d= -f2-)
+                success "Бот работает | PID: $(cat "$BOT_PID_FILE") | @${_bot_name:-unknown}"
             else
                 warn "Бот не запущен."
             fi
