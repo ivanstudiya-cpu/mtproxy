@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.7
+#  Messenger Proxy Manager v4.8
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.7"
+VERSION="4.8"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.7                    ║
+  ║     Messenger Proxy Manager v4.8                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -2116,6 +2116,327 @@ BOTEOF
 }
 
 
+# ═══════════════════════════════════════════════════════════
+# ─── WIREGUARD VPN ──────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+
+WG_DIR="/etc/wireguard"
+WG_CLIENTS_DIR="/etc/mtproxy/wg-clients"
+WG_CONF="$WG_DIR/wg0.conf"
+
+wg_install() {
+    banner
+    echo -e "${G}═══ WIREGUARD VPN ═══${NC}\n"
+    echo "WireGuard VPN — весь трафик телефона идёт через сервер."
+    echo "Работает для WhatsApp, Instagram, любых приложений."
+    echo ""
+
+    if command -v wg &>/dev/null && [[ -f "$WG_CONF" ]]; then
+        warn "WireGuard уже установлен!"
+        echo -e "  Используй меню WireGuard для управления клиентами."
+        pause; return
+    fi
+
+    info "Установка WireGuard..."
+    case $PKG_MANAGER in
+        apt)
+            apt-get update -qq >/dev/null 2>&1
+            apt-get install -y wireguard qrencode >/dev/null 2>&1
+            ;;
+        yum|dnf)
+            $PKG_MANAGER install -y wireguard-tools qrencode >/dev/null 2>&1
+            ;;
+    esac
+
+    if ! command -v wg &>/dev/null; then
+        die "Не удалось установить WireGuard."
+    fi
+
+    mkdir -p "$WG_DIR" "$WG_CLIENTS_DIR"
+    chmod 700 "$WG_DIR"
+
+    # Определяем сетевой интерфейс
+    local IFACE
+    IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5; exit}')
+    [[ -z "$IFACE" ]] && IFACE="eth0"
+
+    # Выбор порта
+    local WG_PORT=51820
+    read -rp "  Порт WireGuard [51820]: " _wp
+    [[ -n "$_wp" && "$_wp" =~ ^[0-9]+$ ]] && WG_PORT="$_wp"
+
+    info "Генерация ключей сервера..."
+    local SERVER_PRIVKEY SERVER_PUBKEY
+    SERVER_PRIVKEY=$(wg genkey)
+    SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
+
+    local SERVER_IP
+    SERVER_IP=$(get_public_ip)
+
+    # Пишем конфиг сервера
+    cat > "$WG_CONF" << WGEOF
+[Interface]
+Address = 10.8.0.1/24
+ListenPort = $WG_PORT
+PrivateKey = $SERVER_PRIVKEY
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE
+WGEOF
+    chmod 600 "$WG_CONF"
+
+    # Включаем IP forwarding
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-wireguard.conf
+    sysctl -p /etc/sysctl.d/99-wireguard.conf >/dev/null 2>&1
+
+    # Открываем порт
+    _firewall_open "$WG_PORT"
+    # WireGuard использует UDP
+    if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+        ufw allow "$WG_PORT"/udp >/dev/null 2>&1
+    fi
+
+    # Запускаем
+    systemctl enable --now wg-quick@wg0 >/dev/null 2>&1
+
+    if ! systemctl is-active --quiet wg-quick@wg0; then
+        die "WireGuard не запустился. Проверь: systemctl status wg-quick@wg0"
+    fi
+
+    # Сохраняем мета-данные
+    echo "$SERVER_PUBKEY|$SERVER_IP|$WG_PORT" > "$WG_CLIENTS_DIR/server.meta"
+
+    success "WireGuard установлен!"
+    log "WireGuard установлен: порт=$WG_PORT"
+
+    echo ""
+    echo -e "  ${C}Сервер:${NC} $SERVER_IP:$WG_PORT"
+    echo -e "  ${C}Публичный ключ:${NC} $SERVER_PUBKEY"
+    echo ""
+    echo -e "  ${Y}Теперь добавь клиента (пункт 20 → 2)${NC}"
+    pause
+}
+
+wg_add_client() {
+    banner
+    echo -e "${G}═══ ДОБАВИТЬ КЛИЕНТА WIREGUARD ═══${NC}\n"
+
+    if ! command -v wg &>/dev/null || [[ ! -f "$WG_CONF" ]]; then
+        warn "WireGuard не установлен. Сначала пункт 20 → 1."; pause; return
+    fi
+
+    read -rp "  Имя клиента (например: phone, ivan): " CLIENT_NAME
+    CLIENT_NAME="${CLIENT_NAME//[^a-zA-Z0-9_-]/}"
+    [[ -z "$CLIENT_NAME" ]] && CLIENT_NAME="client-$(date +%s)"
+
+    local CLIENT_FILE="$WG_CLIENTS_DIR/$CLIENT_NAME.conf"
+    if [[ -f "$CLIENT_FILE" ]]; then
+        warn "Клиент '$CLIENT_NAME' уже существует!"; pause; return
+    fi
+
+    # Читаем мета-данные сервера
+    local SERVER_PUBKEY SERVER_IP WG_PORT
+    SERVER_PUBKEY=$(cut -d'|' -f1 "$WG_CLIENTS_DIR/server.meta" 2>/dev/null)
+    SERVER_IP=$(cut -d'|' -f2 "$WG_CLIENTS_DIR/server.meta" 2>/dev/null)
+    WG_PORT=$(cut -d'|' -f3 "$WG_CLIENTS_DIR/server.meta" 2>/dev/null)
+
+    # Определяем следующий IP для клиента
+    local LAST_IP
+    LAST_IP=$(grep -h "^Address" "$WG_CLIENTS_DIR"/*.conf 2>/dev/null | \
+        grep -oE '10\.8\.0\.[0-9]+' | sort -t. -k4 -n | tail -1 | cut -d. -f4)
+    local CLIENT_IP="10.8.0.$((${LAST_IP:-1} + 1))"
+
+    info "Генерация ключей клиента..."
+    local CLIENT_PRIVKEY CLIENT_PUBKEY
+    CLIENT_PRIVKEY=$(wg genkey)
+    CLIENT_PUBKEY=$(echo "$CLIENT_PRIVKEY" | wg pubkey)
+
+    # Конфиг клиента
+    cat > "$CLIENT_FILE" << CLEOF
+[Interface]
+PrivateKey = $CLIENT_PRIVKEY
+Address = $CLIENT_IP/24
+DNS = 8.8.8.8, 1.1.1.1
+
+[Peer]
+PublicKey = $SERVER_PUBKEY
+Endpoint = $SERVER_IP:$WG_PORT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+CLEOF
+    chmod 600 "$CLIENT_FILE"
+
+    # Добавляем пира на сервер
+    wg set wg0 peer "$CLIENT_PUBKEY" allowed-ips "$CLIENT_IP/32"
+
+    # Пишем в конфиг сервера чтобы пережило перезагрузку
+    cat >> "$WG_CONF" << PEEREOF
+
+# Client: $CLIENT_NAME
+[Peer]
+PublicKey = $CLIENT_PUBKEY
+AllowedIPs = $CLIENT_IP/32
+PEEREOF
+
+    success "Клиент '$CLIENT_NAME' создан! IP: $CLIENT_IP"
+    log "WireGuard: добавлен клиент $CLIENT_NAME ($CLIENT_IP)"
+
+    echo ""
+    echo -e "${Y}QR-код для импорта на телефоне:${NC}\n"
+    qrencode -t ANSIUTF8 < "$CLIENT_FILE"
+
+    echo ""
+    echo -e "${C}Конфиг сохранён:${NC} $CLIENT_FILE"
+    echo -e "${DIM}Можно передать файл на телефон через scp или скопировать текст:${NC}"
+    echo ""
+    cat "$CLIENT_FILE"
+    pause
+}
+
+wg_list_clients() {
+    banner
+    echo -e "${C}═══ КЛИЕНТЫ WIREGUARD ═══${NC}\n"
+
+    if ! command -v wg &>/dev/null; then
+        warn "WireGuard не установлен."; pause; return
+    fi
+
+    local peers
+    peers=$(wg show wg0 2>/dev/null)
+    if [[ -z "$peers" ]]; then
+        warn "Нет активных пиров."; pause; return
+    fi
+
+    wg show wg0 2>/dev/null
+    echo ""
+    echo -e "${C}Файлы клиентов:${NC}"
+    for f in "$WG_CLIENTS_DIR"/*.conf; do
+        [[ -f "$f" ]] || continue
+        local name; name=$(basename "$f" .conf)
+        local addr; addr=$(grep '^Address' "$f" | cut -d= -f2 | tr -d ' ')
+        echo -e "  ${Y}$name${NC} — $addr"
+    done
+    pause
+}
+
+wg_show_qr() {
+    banner
+    echo -e "${C}═══ QR КОД КЛИЕНТА ═══${NC}\n"
+
+    local files=("$WG_CLIENTS_DIR"/*.conf)
+    if [[ ${#files[@]} -eq 0 || ! -f "${files[0]}" ]]; then
+        warn "Клиенты не найдены."; pause; return
+    fi
+
+    for i in "${!files[@]}"; do
+        local name; name=$(basename "${files[$i]}" .conf)
+        echo -e "  ${Y}$((i+1)))${NC} $name"
+    done
+    echo ""
+    read -rp "  Номер клиента: " IDX
+    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#files[@]} ]]; then
+        warn "Неверный номер."; pause; return
+    fi
+
+    local CLIENT_FILE="${files[$((IDX-1))]}"
+    local name; name=$(basename "$CLIENT_FILE" .conf)
+
+    echo -e "\n${Y}QR-код для $name:${NC}\n"
+    qrencode -t ANSIUTF8 < "$CLIENT_FILE"
+    echo ""
+    cat "$CLIENT_FILE"
+    pause
+}
+
+wg_delete_client() {
+    banner
+    echo -e "${R}═══ УДАЛИТЬ КЛИЕНТА WIREGUARD ═══${NC}\n"
+
+    local files=("$WG_CLIENTS_DIR"/*.conf)
+    if [[ ${#files[@]} -eq 0 || ! -f "${files[0]}" ]]; then
+        warn "Клиенты не найдены."; pause; return
+    fi
+
+    for i in "${!files[@]}"; do
+        local name; name=$(basename "${files[$i]}" .conf)
+        echo -e "  ${Y}$((i+1)))${NC} $name"
+    done
+    echo ""
+    read -rp "  Номер для удаления (0 — отмена): " IDX
+    [[ "$IDX" == "0" ]] && return
+    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#files[@]} ]]; then
+        warn "Неверный номер."; pause; return
+    fi
+
+    local CLIENT_FILE="${files[$((IDX-1))]}"
+    local name; name=$(basename "$CLIENT_FILE" .conf)
+    local CLIENT_PUBKEY
+    CLIENT_PUBKEY=$(grep '^PrivateKey' "$CLIENT_FILE" | cut -d= -f2- | tr -d ' ' | wg pubkey 2>/dev/null)
+
+    read -rp "  Удалить клиента '$name'? [y/N] " confirm
+    [[ "${confirm,,}" != "y" ]] && return
+
+    [[ -n "$CLIENT_PUBKEY" ]] && wg set wg0 peer "$CLIENT_PUBKEY" remove 2>/dev/null
+    sed -i "/# Client: $name/,/^$/d" "$WG_CONF" 2>/dev/null
+    rm -f "$CLIENT_FILE"
+
+    success "Клиент '$name' удалён."
+    log "WireGuard: удалён клиент $name"
+    pause
+}
+
+wg_uninstall() {
+    banner
+    echo -e "${R}═══ УДАЛЕНИЕ WIREGUARD ═══${NC}\n"
+    read -rp "  Удалить WireGuard и всех клиентов? [y/N] " confirm
+    [[ "${confirm,,}" != "y" ]] && return
+
+    systemctl stop wg-quick@wg0 2>/dev/null
+    systemctl disable wg-quick@wg0 2>/dev/null
+    rm -rf "$WG_DIR" "$WG_CLIENTS_DIR"
+    rm -f /etc/sysctl.d/99-wireguard.conf
+    sysctl -p >/dev/null 2>&1
+
+    success "WireGuard удалён."
+    log "WireGuard удалён"
+    pause
+}
+
+wg_menu() {
+    while true; do
+        banner
+        echo -e "${W}  ── WireGuard VPN (WhatsApp / весь трафик) ──${NC}\n"
+
+        # Статус
+        if command -v wg &>/dev/null && systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+            local peers_count
+            peers_count=$(wg show wg0 peers 2>/dev/null | wc -l)
+            echo -e "  Статус: ${G}running${NC} | Клиентов: ${Y}$peers_count${NC}\n"
+        else
+            echo -e "  Статус: ${R}не установлен${NC}\n"
+        fi
+
+        echo -e "  ${G}1)${NC} Установить WireGuard"
+        echo -e "  ${G}2)${NC} Добавить клиента + QR"
+        echo -e "  ${C}3)${NC} Список клиентов"
+        echo -e "  ${C}4)${NC} Показать QR клиента"
+        echo -e "  ${R}5)${NC} Удалить клиента"
+        echo -e "  ${R}6)${NC} Удалить WireGuard"
+        echo -e "  ${DIM}0)${NC} Назад\n"
+
+        read -rp "  Пункт: " choice
+        case $choice in
+            1) wg_install ;;
+            2) wg_add_client ;;
+            3) wg_list_clients ;;
+            4) wg_show_qr ;;
+            5) wg_delete_client ;;
+            6) wg_uninstall ;;
+            0) return ;;
+            *) warn "Неверный ввод." ;;
+        esac
+    done
+}
+
 # ─── ГЛАВНОЕ МЕНЮ ───────────────────────────────────────────
 
 main_menu() {
@@ -2133,6 +2454,9 @@ main_menu() {
         echo ""
         echo -e "  ${W}── Xray SOCKS5 (WhatsApp / универсальный) ──${NC}"
         echo -e "  ${M}9)${NC}  Меню Xray SOCKS5"
+        echo ""
+        echo -e "  ${W}── WireGuard VPN (WhatsApp / весь трафик) ──${NC}"
+        echo -e "  ${G}20)${NC} Меню WireGuard VPN"
         echo ""
         echo -e "  ${W}── Установить всё сразу ──${NC}"
         echo -e "  ${G}10)${NC} Установить Telegram + Xray"
@@ -2172,6 +2496,7 @@ main_menu() {
             17) delete_proxy ;;
             18) full_uninstall ;;
             19) setup_tg_bot ;;
+            20) wg_menu ;;
             0)  echo -e "${DIM}Выход.${NC}"; exit 0 ;;
             *)  warn "Неверный ввод." ;;
         esac
