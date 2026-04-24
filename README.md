@@ -1,18 +1,13 @@
-<div align="center">
-
 # 🔒 Messenger Proxy Manager
 
-### Telegram MTProxy с Fake TLS + Xray SOCKS5 для WhatsApp
-### Всё в одном bash-скрипте. Работает за 1 минуту.
+### Telegram MTProxy + Xray SOCKS5 + WireGuard VPN — всё в одном bash-скрипте
 
-[![Version](https://img.shields.io/badge/version-4.0-blue?style=for-the-badge)](https://github.com/ivanstudiya-cpu/mtproxy/releases)
-[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
+[![Version](https://img.shields.io/badge/version-4.9-blue?style=for-the-badge)](https://github.com/ivanstudiya-cpu/mtproxy/releases)
+[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](https://github.com/ivanstudiya-cpu/mtproxy/blob/main/LICENSE)
 [![Docker](https://img.shields.io/badge/docker-required-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![Stars](https://img.shields.io/github/stars/ivanstudiya-cpu/mtproxy?style=for-the-badge&color=yellow)](https://github.com/ivanstudiya-cpu/mtproxy/stargazers)
 
-**[🇷🇺 Русский](#-быстрая-установка) | [📖 Документация](#-возможности) | [⭐ Поставить звезду](https://github.com/ivanstudiya-cpu/mtproxy)**
-
-</div>
+**[🇷🇺 Русский](#-быстрая-установка) | [⭐ Поставить звезду](https://github.com/ivanstudiya-cpu/mtproxy)**
 
 ---
 
@@ -23,6 +18,7 @@
 ```
 ✅ Telegram MTProxy  — встроен в Telegram, не нужен VPN
 ✅ Xray SOCKS5       — для WhatsApp, Instagram, браузера
+✅ WireGuard VPN     — весь трафик через сервер, работает везде
 ✅ Fake TLS          — трафик выглядит как обычный HTTPS
 ✅ Docker            — изолированно, надёжно, легко удалить
 ✅ Один скрипт       — установка, управление, мониторинг
@@ -38,9 +34,9 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
   && sudo ./mtproxy.sh
 ```
 
-> После установки скрипт доступен глобально: просто пиши `mtproxy` в терминале
+> После установки скрипт доступен глобально — просто пиши `mtproxy` в терминале
 
-**Требования:** VPS с Linux (Ubuntu/Debian/CentOS) + root-доступ. Docker установится сам.
+**Требования:** VPS с Linux (Ubuntu 20.04+ / Debian 10+ / CentOS 7+) + root-доступ. Docker установится сам.
 
 ---
 
@@ -48,7 +44,7 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
 ```
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.0                    ║
+  ║     Messenger Proxy Manager v4.9                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 
@@ -65,54 +61,20 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
   ── Xray SOCKS5 (WhatsApp / универсальный) ──
   9)  Меню Xray SOCKS5
 
+  ── WireGuard VPN (WhatsApp / весь трафик) ──
+  20) Меню WireGuard VPN
+
   ── Установить всё сразу ──
   10) Установить Telegram + Xray
+
+  ── Telegram Бот ──
+  19) Бот управления (add/delete/list/qr)
 
   ── Система ──
   11) Firewall    12) Healthcheck    13) Авто-rotate
   14) TG-уведомления    15) Обновить скрипт
-```
-
-```
-  Статус портов:
-  ──────────────────────────────────────
-  Порт    Процесс       Firewall          Прокси
-  ──────────────────────────────────────
-  443     занят         открыт            ivan
-  8443    свободен      закрыт
-  3128    свободен      открыт
-  1080    занят         открыт            dows
-  ──────────────────────────────────────
-
-  Выберите порт:
-  1) 443   (рекомендуется — HTTPS)
-  2) 8443
-  3) 3128
-  4) 1080  (SOCKS)
-  5) Свой порт
-```
-
-```
-  ╔══════════════════════════════════════════╗
-  ║      Прокси успешно создан!             ║
-  ╚══════════════════════════════════════════╝
-
-  Клиент:  ivan
-  Домен:   cloudflare.com (Fake TLS)
-  IP:      YOUR_SERVER_IP
-  Порт:    443
-  Secret:  ee677b0daeb1d77040d847...
-
-  tg:// ссылка:
-  tg://proxy?server=YOUR_SERVER_IP&port=443&secret=ee677...
-
-  QR-код:
-  █████████████████████
-  ██ ▄▄▄▄▄ █▀ █▀ ▄▄▄▄▄ ██
-  ██ █   █ ██▄ ▀ █   █ ██
-  ██ █▄▄▄█ █▀▀▄▄ █▄▄▄█ ██
-  ██▄▄▄▄▄▄▄█▄▀ ▀▄▄▄▄▄▄▄██
-  █████████████████████
+  16) Просмотр лога     17) Удалить MTProxy
+  18) Полное удаление
 ```
 
 ---
@@ -120,6 +82,7 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 ## 🎯 Возможности
 
 ### 🔵 Telegram MTProxy (Fake TLS)
+
 | Фича | Описание |
 |------|----------|
 | **Fake TLS** | Трафик маскируется под HTTPS к реальному сайту |
@@ -127,24 +90,38 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 | **QR-коды** | `tg://` и `https://t.me/proxy` прямо в терминале |
 | **Несколько клиентов** | Каждый на своём порту (443, 8443, 1080...) |
 | **Rotate Secret** | Смена секрета без пересоздания прокси |
+| **Авто-rotate** | Cron обновляет секреты раз в неделю/месяц |
 | **Автобэкапы** | Перед каждым изменением |
 
 ### 🟣 Xray SOCKS5 (универсальный)
+
 | Фича | Описание |
 |------|----------|
 | **Все приложения** | WhatsApp, Instagram, браузер, любые мессенджеры |
+| **Порт по умолчанию** | 8443 — редко блокируется провайдерами |
 | **Авторизация** | Открытый или с логином/паролем |
-| **UDP** | Голосовые звонки WhatsApp работают |
+| **HTTP прокси** | Второй порт для приложений без SOCKS5 |
 | **QR-код** | Для быстрого подключения |
 
+### 🟢 WireGuard VPN (новое в v4.9)
+
+| Фича | Описание |
+|------|----------|
+| **Весь трафик** | WhatsApp, любые приложения без настройки прокси в каждом |
+| **Порт 53/UDP** | DNS-порт по умолчанию — не блокируется WiFi и операторами |
+| **QR-код клиента** | Импорт на телефон за 5 секунд |
+| **Несколько клиентов** | Отдельный конфиг для каждого устройства |
+| **Фикс Docker NAT** | Явные iptables правила — работает вместе с Docker |
+| **Управление из меню** | Добавить/удалить клиента, показать QR |
+
 ### ⚙️ Система
+
 | Фича | Описание |
 |------|----------|
 | **Healthcheck** | Cron каждые 5 минут — упавший прокси перезапускается сам |
 | **TG уведомления** | Бот пишет когда прокси упал и восстановился |
-| **Авто-rotate** | Секреты обновляются раз в неделю/месяц |
+| **Telegram бот** | Управление прокси прямо из Telegram (/add /delete /list /qr) |
 | **Firewall-помощник** | Автооткрытие портов в UFW/firewalld/iptables |
-| **Таблица портов** | Видно что занято прямо перед выбором |
 | **Экспорт** | Все ссылки в один файл одной командой |
 | **Миграция** | Перенос на новый сервер одной командой |
 | **Авто-обновление** | Скрипт обновляется с GitHub |
@@ -154,6 +131,7 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 ## 📱 Подключение на телефоне
 
 ### Telegram (30 секунд)
+
 ```
 1. Скрипт выдаёт ссылку: tg://proxy?server=IP&port=443&secret=...
 2. Открой ссылку на телефоне
@@ -163,26 +141,42 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
 Или отсканируй QR-код прямо из терминала.
 
-### WhatsApp через Xray SOCKS5
+### WhatsApp / все приложения — WireGuard (рекомендуется)
+
+1. Установи приложение **WireGuard** из Play Store / App Store
+2. В скрипте выбери `20) → 1)` (установить WireGuard)
+3. Добавь клиента `20) → 2)` — появится QR-код
+4. В приложении WireGuard нажми `+` → `Сканировать QR`
+5. Включи VPN — весь трафик идёт через сервер ✅
+
+> **Совет:** WireGuard работает на порту 53/UDP по умолчанию — он не блокируется ни домашними роутерами, ни мобильными операторами.
+
+### WhatsApp через Xray SOCKS5 (альтернатива)
+
 ```
-Настройки → Хранилище и данные → Прокси
-Тип:    SOCKS5
-Хост:   IP_сервера
-Порт:   1080
+Настройки WhatsApp → Хранилище и данные → Прокси
+Хост: IP_сервера
+Порт: 8443
 ```
 
-### Android (системный — все приложения)
-```
-Настройки → WiFi → Прокси → Вручную
-Хост: IP_сервера  |  Порт: 1080  |  Тип: SOCKS5
-```
+---
+
+## 🛡 Безопасность (v4.6+)
+
+- Логи и конфиги создаются с правами `600` — читает только root
+- Секреты MTProxy **не пишутся** в лог-файл
+- Конфиги бота и уведомлений читаются через `grep`, а не через `source` — исключено выполнение произвольного кода
+- Пароли Xray хранятся в base64 — символ `|` в пароле не ломает парсинг
+- Ввод номера контейнера валидируется — отрицательные индексы заблокированы
+- `python3` проверяется при установке
+- Exponential backoff в Telegram боте при сетевых ошибках
 
 ---
 
 ## 🌐 Домены для Fake TLS
 
 <details>
-<summary>🌍 Международные (32 домена) — нажми чтобы раскрыть</summary>
+<summary>🌍 Международные (32 домена)</summary>
 
 **Tech:** `google.com` `cloudflare.com` `microsoft.com` `apple.com` `amazon.com` `github.com` `stackoverflow.com` `gitlab.com`
 
@@ -191,11 +185,10 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 **Развлечения:** `netflix.com` `twitch.tv` `discord.com` `zoom.us` `spotify.com` `reddit.com` `medium.com` `tumblr.com`
 
 **Образование:** `coursera.org` `udemy.com` `khanacademy.org` `edx.org` `duolingo.com` `ted.com` `skillshare.com`
-
 </details>
 
 <details>
-<summary>🇷🇺 Российские (29 доменов) — нажми чтобы раскрыть</summary>
+<summary>🇷🇺 Российские (29 доменов)</summary>
 
 **СМИ:** `lenta.ru` `rbc.ru` `ria.ru` `kommersant.ru` `vedomosti.ru` `iz.ru` `novayagazeta.ru` `meduza.io`
 
@@ -204,12 +197,11 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 **Образование:** `stepik.org` `geekbrains.ru` `skillbox.ru` `hexlet.io` `netology.ru` `skillfactory.ru`
 
 **Сервисы:** `gosuslugi.ru` `sberbank.ru` `tinkoff.ru` `avito.ru` `ozon.ru` `wildberries.ru` `kinopoisk.ru` `ivi.ru`
-
 </details>
 
 ---
 
-## 🛡 Требования
+## 🛠 Требования
 
 | | |
 |---|---|
@@ -217,7 +209,7 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 | **RAM** | от 512MB (1GB+ рекомендуется) |
 | **Docker** | Устанавливается автоматически |
 | **Права** | root / sudo |
-| **Порты** | 443, 8443, 3128, 1080 или любой свой |
+| **Порты** | 443 (MTProxy), 8443 (Xray SOCKS5), 53/UDP (WireGuard) |
 
 ---
 
@@ -226,15 +218,39 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 <details>
 <summary>История версий</summary>
 
+### v4.9 — WireGuard VPN
+- Добавлен WireGuard VPN — весь трафик устройства через сервер
+- Порт 53/UDP по умолчанию — обходит блокировки WiFi и операторов
+- QR-код для импорта клиента одним сканированием
+- Фикс конфликта NAT с Docker (явные iptables правила для 10.8.0.0/24)
+- Управление клиентами из меню (добавить/удалить/показать QR)
+
+### v4.7 — Xray порт
+- Порт Xray по умолчанию изменён с 1080 на 8443
+- Меню выбора порта при установке Xray
+
+### v4.6 — Безопасность
+- `source notify.conf` и `source bot.conf` заменены на безопасный `grep+cut`
+- Секрет MTProxy убран из логов авто-rotate
+- `chmod 600` на лог-файл при создании
+- Валидация IDX во всех меню (отрицательные индексы заблокированы)
+- Пароли Xray хранятся в base64 — символ `|` в пароле не ломает конфиг
+- Exponential backoff в Telegram боте при сетевых ошибках
+- Проверка наличия `python3` при установке
+- Безопасная установка скрипта при запуске через `curl | bash`
+
+### v4.5 — Telegram бот
+- Бот управления прокси из Telegram (/add /delete /list /status /qr /restart)
+- Admin-only фильтр, авторизация по chat_id
+
 ### v4.0 — Xray SOCKS5
 - Добавлен Xray SOCKS5 (WhatsApp / универсальный прокси)
 - Пункт "Установить всё сразу" (Telegram + Xray)
 - Авторизация Xray (открытый / логин+пароль)
-- QR-код для SOCKS5, инструкция по подключению в терминале
+- QR-код для SOCKS5
 
 ### v3.0 — Полная автоматизация
 - Таблица статусов портов с firewall статусом
-- Автооткрытие портов, блокировка занятых
 - TG уведомления, healthcheck, авто-rotate по cron
 - Экспорт ссылок, миграция на новый сервер
 - Авто-обновление скрипта с GitHub
@@ -246,7 +262,6 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
 ### v1.0 — Старт
 - Базовый MTProxy с Fake TLS через Docker
-
 </details>
 
 ---
@@ -259,10 +274,6 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
 ---
 
-<div align="center">
-
 **Сделано с ❤️ для русскоязычного сообщества**
 
 [⭐ Поставить звезду](https://github.com/ivanstudiya-cpu/mtproxy) · [🐛 Сообщить о баге](https://github.com/ivanstudiya-cpu/mtproxy/issues) · [💡 Предложить фичу](https://github.com/ivanstudiya-cpu/mtproxy/issues)
-
-</div>
