@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v4.8
+#  Messenger Proxy Manager v5.0
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
@@ -14,7 +14,7 @@ CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="4.8"
+VERSION="5.0"
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -48,7 +48,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v4.8                    ║
+  ║     Messenger Proxy Manager v5.0                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -107,23 +107,28 @@ install_deps() {
         pkg_install curl
     fi
 
-    if ! command -v python3 &>/dev/null; then
-        info "Установка python3..."
-        pkg_install python3
-    fi
-
     mkdir -p "$CONFIG_DIR" "$BACKUP_DIR" "$XRAY_DIR"
     touch "$CONFIG_FILE" "$LOG_FILE"
-    chmod 600 "$CONFIG_FILE" "$LOG_FILE" 2>/dev/null || true
+    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+
+    # Настраиваем logrotate если не настроен
+    if [[ ! -f /etc/logrotate.d/mtproxy ]]; then
+        cat > /etc/logrotate.d/mtproxy << 'LREOF'
+/var/log/mtproxy.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    create 0640 root root
+}
+LREOF
+    fi
 
     if [[ ! -f "$BINARY_PATH" || "$(realpath "$0")" != "$BINARY_PATH" ]]; then
-        if [[ -f "$0" && -r "$0" ]]; then
-            cp "$0" "$BINARY_PATH"
-            chmod +x "$BINARY_PATH"
-            success "Команда 'mtproxy' доступна глобально."
-        else
-            warn "Не удалось установить глобальную команду (скрипт запущен через pipe?). Скопируйте файл вручную в $BINARY_PATH"
-        fi
+        cp "$0" "$BINARY_PATH"
+        chmod +x "$BINARY_PATH"
+        success "Команда 'mtproxy' доступна глобально."
     fi
 }
 
@@ -493,9 +498,6 @@ firewall_menu() {
                 echo -e "  ${Y}$((i+1)))${NC} ${containers[$i]}"
             done
             read -rp "Номер: " IDX
-            if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#containers[@]} ]]; then
-                warn "Неверный номер."; pause; return
-            fi
             local CONTAINER="${containers[$((IDX-1))]}"
             local PORT
             PORT=$(docker inspect "$CONTAINER" \
@@ -734,9 +736,6 @@ manage_proxy() {
 
     echo ""
     read -rp "Номер контейнера: " IDX
-    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#containers[@]} ]]; then
-        warn "Неверный номер."; pause; return
-    fi
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
 
@@ -767,10 +766,7 @@ delete_proxy() {
 
     echo ""
     read -rp "Номер для удаления (0 — отмена): " IDX
-    [[ "$IDX" == "0" ]] && return
-    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#containers[@]} ]]; then
-        warn "Неверный номер."; pause; return
-    fi
+    [[ "$IDX" -eq 0 ]] && return
 
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
@@ -1005,7 +1001,7 @@ for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
 
     sed -i "/^$CONTAINER|/d" "$CONFIG"
     echo "$CONTAINER|$CLIENT_ID|$PORT|$NEW_SECRET|$DOMAIN|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTO-ROTATE OK: $CONTAINER, секрет обновлён" >> "$LOG"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTO-ROTATE OK: $CONTAINER, новый секрет: $NEW_SECRET" >> "$LOG"
 done
 AREOF
             chmod +x /etc/mtproxy/auto_rotate.sh
@@ -1068,13 +1064,9 @@ NOTIFY_CONF="/etc/mtproxy/notify.conf"
 
 _tg_send() {
     [[ ! -f "$NOTIFY_CONF" ]] && return
-    # Безопасное чтение — без source чтобы исключить выполнение произвольного кода
-    local _token _chat
-    _token=$(grep '^BOT_TOKEN=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
-    _chat=$(grep '^CHAT_ID=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
-    [[ -z "$_token" || -z "$_chat" ]] && return
-    curl -s -X POST "https://api.telegram.org/bot${_token}/sendMessage" \
-        -d chat_id="$_chat" \
+    source "$NOTIFY_CONF"
+    curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+        -d chat_id="$CHAT_ID" \
         -d text="$1" \
         -d parse_mode="HTML" >/dev/null 2>&1
 }
@@ -1115,12 +1107,8 @@ HCEOF
             if [[ ! -f "$NOTIFY_CONF" ]]; then
                 warn "Сначала настрой уведомления (пункт 1)."; pause; return
             fi
-            local BOT_TOKEN CHAT_ID
-            BOT_TOKEN=$(grep '^BOT_TOKEN=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
-            CHAT_ID=$(grep '^CHAT_ID=' "$NOTIFY_CONF" | head -1 | cut -d= -f2-)
-            if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
-                warn "Неверный формат notify.conf. Пересоздай уведомления (пункт 1)."; pause; return
-            fi
+            # shellcheck source=/dev/null
+            source "$NOTIFY_CONF"
             RESULT=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
                 -d chat_id="$CHAT_ID" \
                 -d text="✅ <b>MTProxy тест!</b>%0AУведомления работают. Сервер: $(hostname)" \
@@ -1147,7 +1135,8 @@ self_update() {
     echo -e "${C}═══ ОБНОВЛЕНИЕ СКРИПТА ═══${NC}\n"
     info "Проверяю обновления на GitHub..."
 
-    local TMP="/tmp/mtproxy_new.sh"
+    local TMP
+    TMP=$(mktemp /tmp/mtproxy_update.XXXXXX)
     curl -fsSL "$GITHUB_RAW" -o "$TMP" 2>/dev/null
 
     if [[ ! -f "$TMP" || ! -s "$TMP" ]]; then
@@ -1248,15 +1237,15 @@ xray_install() {
 
     # Выбор порта
     echo -e "${C}Выберите порт для Xray SOCKS5:${NC}"
-    echo "  1) 8443 (рекомендуется — альтернативный HTTPS)"
-    echo "  2) 8080"
-    echo "  3) 1080 (стандартный SOCKS5)"
+    echo "  1) 1080 (стандартный SOCKS5)"
+    echo "  2) 3129"
+    echo "  3) 8080"
     echo "  4) Свой порт"
     read -rp "  Выбор [1-4]: " xp
     case $xp in
-        1) XRAY_PORT=8443 ;;
-        2) XRAY_PORT=8080 ;;
-        3) XRAY_PORT=1080 ;;
+        1) XRAY_PORT=1080 ;;
+        2) XRAY_PORT=3129 ;;
+        3) XRAY_PORT=8080 ;;
         4) read -rp "  Порт: " XRAY_PORT
            [[ "$XRAY_PORT" =~ ^[0-9]+$ ]] || XRAY_PORT=1080 ;;
         *) XRAY_PORT=1080 ;;
@@ -1453,11 +1442,7 @@ XCONF
     local IP
     IP=$(get_public_ip)
 
-    local _xuser_b64 _xpass_b64
-    _xuser_b64=$(echo -n "$XRAY_USER" | base64)
-    _xpass_b64=$(echo -n "$XRAY_PASS" | base64)
-    echo "$XRAY_PORT|$XRAY_HTTP_PORT|$_xuser_b64|$_xpass_b64|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
-    chmod 600 "$CONFIG_DIR/xray.conf"
+    echo "$XRAY_PORT|$XRAY_HTTP_PORT|$XRAY_USER|$XRAY_PASS|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
     log "Xray установлен: порт=$XRAY_PORT"
 
     clear
@@ -1518,8 +1503,8 @@ xray_status() {
     if [[ -f "$CONFIG_DIR/xray.conf" ]]; then
         local XHTTP_PORT XUSER XPASS
         XHTTP_PORT=$(cut -d'|' -f2 "$CONFIG_DIR/xray.conf")
-        XUSER=$(cut -d'|' -f3 "$CONFIG_DIR/xray.conf" | base64 -d 2>/dev/null)
-        XPASS=$(cut -d'|' -f4 "$CONFIG_DIR/xray.conf" | base64 -d 2>/dev/null)
+        XUSER=$(cut -d'|' -f3 "$CONFIG_DIR/xray.conf")
+        XPASS=$(cut -d'|' -f4 "$CONFIG_DIR/xray.conf")
         [[ -n "$XHTTP_PORT" ]] && echo -e "  ${W}HTTP порт:${NC} $XHTTP_PORT  ${DIM}(для WhatsApp)${NC}"
         [[ -n "$XUSER" ]] && echo -e "  ${W}Логин:${NC}    $XUSER"
         [[ -n "$XPASS" ]] && echo -e "  ${W}Пароль:${NC}   $XPASS"
@@ -1594,16 +1579,18 @@ xray_delete() {
     docker rm xray-proxy >/dev/null 2>&1
     rm -f "$CONFIG_DIR/xray.conf"
 
-    # Закрываем порты в firewall
-    if [[ -n "$HTTP_PORT" ]]; then
-        read -rp "  Закрыть порты $SOCKS_PORT и $HTTP_PORT в firewall? [y/N] " fw
-        if [[ "${fw,,}" == "y" ]]; then
-            _firewall_close "$SOCKS_PORT"
-            _firewall_close "$HTTP_PORT"
+    # Закрываем порты в firewall — защита от пустых значений
+    if [[ -n "$SOCKS_PORT" && "$SOCKS_PORT" =~ ^[0-9]+$ ]]; then
+        if [[ -n "$HTTP_PORT" && "$HTTP_PORT" =~ ^[0-9]+$ ]]; then
+            read -rp "  Закрыть порты $SOCKS_PORT и $HTTP_PORT в firewall? [y/N] " fw
+            if [[ "${fw,,}" == "y" ]]; then
+                _firewall_close "$SOCKS_PORT"
+                _firewall_close "$HTTP_PORT"
+            fi
+        else
+            read -rp "  Закрыть порт $SOCKS_PORT в firewall? [y/N] " fw
+            [[ "${fw,,}" == "y" ]] && _firewall_close "$SOCKS_PORT"
         fi
-    elif [[ -n "$SOCKS_PORT" ]]; then
-        read -rp "  Закрыть порт $SOCKS_PORT в firewall? [y/N] " fw
-        [[ "${fw,,}" == "y" ]] && _firewall_close "$SOCKS_PORT"
     fi
 
     success "Xray удалён."
@@ -1794,7 +1781,8 @@ _bot_cmd_add() {
 🔗 https://
 <code>$https_link</code>"
 
-    local qr_file="/tmp/qr_${client_id}_$$.png"
+    local qr_file
+    qr_file=$(mktemp "/tmp/qr_${client_id}.XXXXXX.png")
     if command -v qrencode &>/dev/null; then
         qrencode -o "$qr_file" -s 8 "$link" 2>/dev/null
         [[ -f "$qr_file" ]] && _bot_send_photo "$token" "$chat_id" "$qr_file" "QR для $client_id" && rm -f "$qr_file"
@@ -1916,7 +1904,8 @@ _bot_cmd_qr() {
     cmd=$(docker inspect "$container" --format='{{join .Config.Cmd " "}}' 2>/dev/null)
     secret=$(echo "$cmd" | awk '{print $NF}')
     local link="tg://proxy?server=${ip}&port=${port}&secret=${secret}"
-    local qr_file="/tmp/qr_${client_id}_$$.png"
+    local qr_file
+    qr_file=$(mktemp "/tmp/qr_${client_id}.XXXXXX.png")
 
     if command -v qrencode &>/dev/null; then
         qrencode -o "$qr_file" -s 8 "$link" 2>/dev/null
@@ -1960,14 +1949,14 @@ try:
         if text and chat:
             print(f"{uid}|||{chat}|||{text}")
 except Exception as e:
-    pass
+    import sys
+    print(f"PARSE_ERROR: {e}", file=sys.stderr)
 PYEOF
 }
 
 _bot_loop() {
     local token="$1" admin_id="$2"
     local offset=0
-    local backoff=1
 
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] БОТ запущен" >> "$BOT_LOG"
     _bot_send "$token" "$admin_id" "🟢 <b>Proxy Bot запущен!</b>
@@ -1975,16 +1964,7 @@ _bot_loop() {
 
     while true; do
         local response
-        response=$(curl -s --max-time 30 "https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&limit=5" 2>/dev/null)
-
-        # Если ответ пустой или невалидный — exponential backoff (макс 60 сек)
-        if [[ -z "$response" ]] || ! echo "$response" | grep -q '"ok"'; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] БОТ: ошибка сети, пауза ${backoff}с" >> "$BOT_LOG"
-            sleep "$backoff"
-            backoff=$(( backoff < 60 ? backoff * 2 : 60 ))
-            continue
-        fi
-        backoff=1
+        response=$(curl -s "https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&limit=5" 2>/dev/null)
 
         local updates
         updates=$(_bot_parse_updates "$response")
@@ -2079,20 +2059,50 @@ BOTEOF
                 rm -f "$BOT_PID_FILE"
             fi
 
-            # Запускаем в фоне
+            # Создаём systemd unit для автозапуска при ребуте
+            cat > /etc/systemd/system/mtproxy-bot.service << SVCEOF
+[Unit]
+Description=MTProxy Telegram Bot
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mtproxy --bot-daemon
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+            # Запускаем в фоне (PID файл для управления)
+            # Останавливаем старый если есть
+            if [[ -f "$BOT_PID_FILE" ]]; then
+                kill "$(cat "$BOT_PID_FILE")" 2>/dev/null || true
+                rm -f "$BOT_PID_FILE"
+            fi
             _bot_loop "$BOT_TOKEN" "$BOT_ADMIN_ID" &
             echo $! > "$BOT_PID_FILE"
 
+            # Активируем systemd если доступен
+            if command -v systemctl &>/dev/null; then
+                systemctl daemon-reload 2>/dev/null || true
+                systemctl enable mtproxy-bot.service 2>/dev/null || true
+            fi
+
             success "Бот @$bot_name запущен (PID: $(cat "$BOT_PID_FILE"))!"
+            success "Systemd unit создан — бот поднимется после ребута."
             echo -e "\n${C}Напиши /help боту в Telegram.${NC}"
             log "TG бот запущен: @$bot_name PID=$(cat "$BOT_PID_FILE")"
             ;;
         2)
             echo ""
             if [[ -f "$BOT_PID_FILE" ]] && kill -0 "$(cat "$BOT_PID_FILE")" 2>/dev/null; then
-                local _bot_name
-                _bot_name=$(grep '^BOT_NAME=' "$BOT_CONF" 2>/dev/null | head -1 | cut -d= -f2-)
-                success "Бот работает | PID: $(cat "$BOT_PID_FILE") | @${_bot_name:-unknown}"
+                # shellcheck disable=SC1090
+                source "$BOT_CONF" 2>/dev/null
+                success "Бот работает | PID: $(cat "$BOT_PID_FILE") | @${BOT_NAME:-unknown}"
             else
                 warn "Бот не запущен."
             fi
@@ -2116,327 +2126,6 @@ BOTEOF
 }
 
 
-# ═══════════════════════════════════════════════════════════
-# ─── WIREGUARD VPN ──────────────────────────────────────────
-# ═══════════════════════════════════════════════════════════
-
-WG_DIR="/etc/wireguard"
-WG_CLIENTS_DIR="/etc/mtproxy/wg-clients"
-WG_CONF="$WG_DIR/wg0.conf"
-
-wg_install() {
-    banner
-    echo -e "${G}═══ WIREGUARD VPN ═══${NC}\n"
-    echo "WireGuard VPN — весь трафик телефона идёт через сервер."
-    echo "Работает для WhatsApp, Instagram, любых приложений."
-    echo ""
-
-    if command -v wg &>/dev/null && [[ -f "$WG_CONF" ]]; then
-        warn "WireGuard уже установлен!"
-        echo -e "  Используй меню WireGuard для управления клиентами."
-        pause; return
-    fi
-
-    info "Установка WireGuard..."
-    case $PKG_MANAGER in
-        apt)
-            apt-get update -qq >/dev/null 2>&1
-            apt-get install -y wireguard qrencode >/dev/null 2>&1
-            ;;
-        yum|dnf)
-            $PKG_MANAGER install -y wireguard-tools qrencode >/dev/null 2>&1
-            ;;
-    esac
-
-    if ! command -v wg &>/dev/null; then
-        die "Не удалось установить WireGuard."
-    fi
-
-    mkdir -p "$WG_DIR" "$WG_CLIENTS_DIR"
-    chmod 700 "$WG_DIR"
-
-    # Определяем сетевой интерфейс
-    local IFACE
-    IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5; exit}')
-    [[ -z "$IFACE" ]] && IFACE="eth0"
-
-    # Выбор порта
-    local WG_PORT=51820
-    read -rp "  Порт WireGuard [51820]: " _wp
-    [[ -n "$_wp" && "$_wp" =~ ^[0-9]+$ ]] && WG_PORT="$_wp"
-
-    info "Генерация ключей сервера..."
-    local SERVER_PRIVKEY SERVER_PUBKEY
-    SERVER_PRIVKEY=$(wg genkey)
-    SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
-
-    local SERVER_IP
-    SERVER_IP=$(get_public_ip)
-
-    # Пишем конфиг сервера
-    cat > "$WG_CONF" << WGEOF
-[Interface]
-Address = 10.8.0.1/24
-ListenPort = $WG_PORT
-PrivateKey = $SERVER_PRIVKEY
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE
-WGEOF
-    chmod 600 "$WG_CONF"
-
-    # Включаем IP forwarding
-    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-wireguard.conf
-    sysctl -p /etc/sysctl.d/99-wireguard.conf >/dev/null 2>&1
-
-    # Открываем порт
-    _firewall_open "$WG_PORT"
-    # WireGuard использует UDP
-    if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
-        ufw allow "$WG_PORT"/udp >/dev/null 2>&1
-    fi
-
-    # Запускаем
-    systemctl enable --now wg-quick@wg0 >/dev/null 2>&1
-
-    if ! systemctl is-active --quiet wg-quick@wg0; then
-        die "WireGuard не запустился. Проверь: systemctl status wg-quick@wg0"
-    fi
-
-    # Сохраняем мета-данные
-    echo "$SERVER_PUBKEY|$SERVER_IP|$WG_PORT" > "$WG_CLIENTS_DIR/server.meta"
-
-    success "WireGuard установлен!"
-    log "WireGuard установлен: порт=$WG_PORT"
-
-    echo ""
-    echo -e "  ${C}Сервер:${NC} $SERVER_IP:$WG_PORT"
-    echo -e "  ${C}Публичный ключ:${NC} $SERVER_PUBKEY"
-    echo ""
-    echo -e "  ${Y}Теперь добавь клиента (пункт 20 → 2)${NC}"
-    pause
-}
-
-wg_add_client() {
-    banner
-    echo -e "${G}═══ ДОБАВИТЬ КЛИЕНТА WIREGUARD ═══${NC}\n"
-
-    if ! command -v wg &>/dev/null || [[ ! -f "$WG_CONF" ]]; then
-        warn "WireGuard не установлен. Сначала пункт 20 → 1."; pause; return
-    fi
-
-    read -rp "  Имя клиента (например: phone, ivan): " CLIENT_NAME
-    CLIENT_NAME="${CLIENT_NAME//[^a-zA-Z0-9_-]/}"
-    [[ -z "$CLIENT_NAME" ]] && CLIENT_NAME="client-$(date +%s)"
-
-    local CLIENT_FILE="$WG_CLIENTS_DIR/$CLIENT_NAME.conf"
-    if [[ -f "$CLIENT_FILE" ]]; then
-        warn "Клиент '$CLIENT_NAME' уже существует!"; pause; return
-    fi
-
-    # Читаем мета-данные сервера
-    local SERVER_PUBKEY SERVER_IP WG_PORT
-    SERVER_PUBKEY=$(cut -d'|' -f1 "$WG_CLIENTS_DIR/server.meta" 2>/dev/null)
-    SERVER_IP=$(cut -d'|' -f2 "$WG_CLIENTS_DIR/server.meta" 2>/dev/null)
-    WG_PORT=$(cut -d'|' -f3 "$WG_CLIENTS_DIR/server.meta" 2>/dev/null)
-
-    # Определяем следующий IP для клиента
-    local LAST_IP
-    LAST_IP=$(grep -h "^Address" "$WG_CLIENTS_DIR"/*.conf 2>/dev/null | \
-        grep -oE '10\.8\.0\.[0-9]+' | sort -t. -k4 -n | tail -1 | cut -d. -f4)
-    local CLIENT_IP="10.8.0.$((${LAST_IP:-1} + 1))"
-
-    info "Генерация ключей клиента..."
-    local CLIENT_PRIVKEY CLIENT_PUBKEY
-    CLIENT_PRIVKEY=$(wg genkey)
-    CLIENT_PUBKEY=$(echo "$CLIENT_PRIVKEY" | wg pubkey)
-
-    # Конфиг клиента
-    cat > "$CLIENT_FILE" << CLEOF
-[Interface]
-PrivateKey = $CLIENT_PRIVKEY
-Address = $CLIENT_IP/24
-DNS = 8.8.8.8, 1.1.1.1
-
-[Peer]
-PublicKey = $SERVER_PUBKEY
-Endpoint = $SERVER_IP:$WG_PORT
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-CLEOF
-    chmod 600 "$CLIENT_FILE"
-
-    # Добавляем пира на сервер
-    wg set wg0 peer "$CLIENT_PUBKEY" allowed-ips "$CLIENT_IP/32"
-
-    # Пишем в конфиг сервера чтобы пережило перезагрузку
-    cat >> "$WG_CONF" << PEEREOF
-
-# Client: $CLIENT_NAME
-[Peer]
-PublicKey = $CLIENT_PUBKEY
-AllowedIPs = $CLIENT_IP/32
-PEEREOF
-
-    success "Клиент '$CLIENT_NAME' создан! IP: $CLIENT_IP"
-    log "WireGuard: добавлен клиент $CLIENT_NAME ($CLIENT_IP)"
-
-    echo ""
-    echo -e "${Y}QR-код для импорта на телефоне:${NC}\n"
-    qrencode -t ANSIUTF8 < "$CLIENT_FILE"
-
-    echo ""
-    echo -e "${C}Конфиг сохранён:${NC} $CLIENT_FILE"
-    echo -e "${DIM}Можно передать файл на телефон через scp или скопировать текст:${NC}"
-    echo ""
-    cat "$CLIENT_FILE"
-    pause
-}
-
-wg_list_clients() {
-    banner
-    echo -e "${C}═══ КЛИЕНТЫ WIREGUARD ═══${NC}\n"
-
-    if ! command -v wg &>/dev/null; then
-        warn "WireGuard не установлен."; pause; return
-    fi
-
-    local peers
-    peers=$(wg show wg0 2>/dev/null)
-    if [[ -z "$peers" ]]; then
-        warn "Нет активных пиров."; pause; return
-    fi
-
-    wg show wg0 2>/dev/null
-    echo ""
-    echo -e "${C}Файлы клиентов:${NC}"
-    for f in "$WG_CLIENTS_DIR"/*.conf; do
-        [[ -f "$f" ]] || continue
-        local name; name=$(basename "$f" .conf)
-        local addr; addr=$(grep '^Address' "$f" | cut -d= -f2 | tr -d ' ')
-        echo -e "  ${Y}$name${NC} — $addr"
-    done
-    pause
-}
-
-wg_show_qr() {
-    banner
-    echo -e "${C}═══ QR КОД КЛИЕНТА ═══${NC}\n"
-
-    local files=("$WG_CLIENTS_DIR"/*.conf)
-    if [[ ${#files[@]} -eq 0 || ! -f "${files[0]}" ]]; then
-        warn "Клиенты не найдены."; pause; return
-    fi
-
-    for i in "${!files[@]}"; do
-        local name; name=$(basename "${files[$i]}" .conf)
-        echo -e "  ${Y}$((i+1)))${NC} $name"
-    done
-    echo ""
-    read -rp "  Номер клиента: " IDX
-    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#files[@]} ]]; then
-        warn "Неверный номер."; pause; return
-    fi
-
-    local CLIENT_FILE="${files[$((IDX-1))]}"
-    local name; name=$(basename "$CLIENT_FILE" .conf)
-
-    echo -e "\n${Y}QR-код для $name:${NC}\n"
-    qrencode -t ANSIUTF8 < "$CLIENT_FILE"
-    echo ""
-    cat "$CLIENT_FILE"
-    pause
-}
-
-wg_delete_client() {
-    banner
-    echo -e "${R}═══ УДАЛИТЬ КЛИЕНТА WIREGUARD ═══${NC}\n"
-
-    local files=("$WG_CLIENTS_DIR"/*.conf)
-    if [[ ${#files[@]} -eq 0 || ! -f "${files[0]}" ]]; then
-        warn "Клиенты не найдены."; pause; return
-    fi
-
-    for i in "${!files[@]}"; do
-        local name; name=$(basename "${files[$i]}" .conf)
-        echo -e "  ${Y}$((i+1)))${NC} $name"
-    done
-    echo ""
-    read -rp "  Номер для удаления (0 — отмена): " IDX
-    [[ "$IDX" == "0" ]] && return
-    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [[ $IDX -lt 1 || $IDX -gt ${#files[@]} ]]; then
-        warn "Неверный номер."; pause; return
-    fi
-
-    local CLIENT_FILE="${files[$((IDX-1))]}"
-    local name; name=$(basename "$CLIENT_FILE" .conf)
-    local CLIENT_PUBKEY
-    CLIENT_PUBKEY=$(grep '^PrivateKey' "$CLIENT_FILE" | cut -d= -f2- | tr -d ' ' | wg pubkey 2>/dev/null)
-
-    read -rp "  Удалить клиента '$name'? [y/N] " confirm
-    [[ "${confirm,,}" != "y" ]] && return
-
-    [[ -n "$CLIENT_PUBKEY" ]] && wg set wg0 peer "$CLIENT_PUBKEY" remove 2>/dev/null
-    sed -i "/# Client: $name/,/^$/d" "$WG_CONF" 2>/dev/null
-    rm -f "$CLIENT_FILE"
-
-    success "Клиент '$name' удалён."
-    log "WireGuard: удалён клиент $name"
-    pause
-}
-
-wg_uninstall() {
-    banner
-    echo -e "${R}═══ УДАЛЕНИЕ WIREGUARD ═══${NC}\n"
-    read -rp "  Удалить WireGuard и всех клиентов? [y/N] " confirm
-    [[ "${confirm,,}" != "y" ]] && return
-
-    systemctl stop wg-quick@wg0 2>/dev/null
-    systemctl disable wg-quick@wg0 2>/dev/null
-    rm -rf "$WG_DIR" "$WG_CLIENTS_DIR"
-    rm -f /etc/sysctl.d/99-wireguard.conf
-    sysctl -p >/dev/null 2>&1
-
-    success "WireGuard удалён."
-    log "WireGuard удалён"
-    pause
-}
-
-wg_menu() {
-    while true; do
-        banner
-        echo -e "${W}  ── WireGuard VPN (WhatsApp / весь трафик) ──${NC}\n"
-
-        # Статус
-        if command -v wg &>/dev/null && systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
-            local peers_count
-            peers_count=$(wg show wg0 peers 2>/dev/null | wc -l)
-            echo -e "  Статус: ${G}running${NC} | Клиентов: ${Y}$peers_count${NC}\n"
-        else
-            echo -e "  Статус: ${R}не установлен${NC}\n"
-        fi
-
-        echo -e "  ${G}1)${NC} Установить WireGuard"
-        echo -e "  ${G}2)${NC} Добавить клиента + QR"
-        echo -e "  ${C}3)${NC} Список клиентов"
-        echo -e "  ${C}4)${NC} Показать QR клиента"
-        echo -e "  ${R}5)${NC} Удалить клиента"
-        echo -e "  ${R}6)${NC} Удалить WireGuard"
-        echo -e "  ${DIM}0)${NC} Назад\n"
-
-        read -rp "  Пункт: " choice
-        case $choice in
-            1) wg_install ;;
-            2) wg_add_client ;;
-            3) wg_list_clients ;;
-            4) wg_show_qr ;;
-            5) wg_delete_client ;;
-            6) wg_uninstall ;;
-            0) return ;;
-            *) warn "Неверный ввод." ;;
-        esac
-    done
-}
-
 # ─── ГЛАВНОЕ МЕНЮ ───────────────────────────────────────────
 
 main_menu() {
@@ -2452,27 +2141,27 @@ main_menu() {
         echo -e "  ${G}7)${NC}  Экспорт всех ссылок в файл"
         echo -e "  ${G}8)${NC}  Миграция на новый сервер"
         echo ""
-        echo -e "  ${W}── Xray SOCKS5 (WhatsApp / универсальный) ──${NC}"
-        echo -e "  ${M}9)${NC}  Меню Xray SOCKS5"
+        echo -e "  ${W}── VLESS + XTLS-Reality (Anti-DPI) ──${NC}"
+        echo -e "  ${G}9)${NC}  Меню VLESS+Reality"
         echo ""
-        echo -e "  ${W}── WireGuard VPN (WhatsApp / весь трафик) ──${NC}"
-        echo -e "  ${G}20)${NC} Меню WireGuard VPN"
+        echo -e "  ${W}── Xray SOCKS5 (WhatsApp / универсальный) ──${NC}"
+        echo -e "  ${M}10)${NC} Меню Xray SOCKS5"
         echo ""
         echo -e "  ${W}── Установить всё сразу ──${NC}"
-        echo -e "  ${G}10)${NC} Установить Telegram + Xray"
+        echo -e "  ${G}11)${NC} Установить Telegram + Xray"
         echo ""
         echo -e "  ${W}── Telegram Бот ──${NC}"
-        echo -e "  ${M}19)${NC} Бот управления (add/delete/list/qr)"
+        echo -e "  ${M}20)${NC} Бот управления (add/delete/list/qr)"
         echo ""
         echo -e "  ${W}── Система ──${NC}"
-        echo -e "  ${C}11)${NC} Firewall — управление портами"
-        echo -e "  ${M}12)${NC} Healthcheck / Автоперезапуск"
-        echo -e "  ${M}13)${NC} Авто-обновление секрета (cron)"
-        echo -e "  ${M}14)${NC} Уведомления в Telegram"
-        echo -e "  ${B}15)${NC} Обновить скрипт"
-        echo -e "  ${DIM}16)${NC} Просмотр лога"
-        echo -e "  ${R}17)${NC} Удалить MTProxy"
-        echo -e "  ${R}18)${NC} Полное удаление"
+        echo -e "  ${C}12)${NC} Firewall — управление портами"
+        echo -e "  ${M}13)${NC} Healthcheck / Автоперезапуск"
+        echo -e "  ${M}14)${NC} Авто-обновление секрета (cron)"
+        echo -e "  ${M}15)${NC} Уведомления в Telegram"
+        echo -e "  ${B}16)${NC} Обновить скрипт"
+        echo -e "  ${DIM}17)${NC} Просмотр лога"
+        echo -e "  ${R}18)${NC} Удалить MTProxy"
+        echo -e "  ${R}19)${NC} Полное удаление"
         echo -e "  ${DIM}0)${NC}  Выход\n"
 
         read -rp "  Пункт: " choice
@@ -2485,18 +2174,18 @@ main_menu() {
             6)  rotate_secret ;;
             7)  export_links ;;
             8)  migrate_export ;;
-            9)  xray_menu ;;
-            10) install_all ;;
-            11) firewall_menu ;;
-            12) setup_healthcheck ;;
-            13) setup_auto_rotate ;;
-            14) setup_tg_notify ;;
-            15) self_update ;;
-            16) show_log ;;
-            17) delete_proxy ;;
-            18) full_uninstall ;;
-            19) setup_tg_bot ;;
-            20) wg_menu ;;
+            9)  xray_reality_menu ;;
+            10) xray_menu ;;
+            11) install_all ;;
+            12) firewall_menu ;;
+            13) setup_healthcheck ;;
+            14) setup_auto_rotate ;;
+            15) setup_tg_notify ;;
+            16) self_update ;;
+            17) show_log ;;
+            18) delete_proxy ;;
+            19) full_uninstall ;;
+            20) setup_tg_bot ;;
             0)  echo -e "${DIM}Выход.${NC}"; exit 0 ;;
             *)  warn "Неверный ввод." ;;
         esac
@@ -2509,3 +2198,307 @@ check_root
 check_os
 install_deps
 main_menu
+
+# ═══════════════════════════════════════════════════════════
+# ─── VLESS + XTLS-REALITY ──────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+
+REALITY_DIR="/etc/mtproxy/xray-reality"
+REALITY_META="$REALITY_DIR/reality.meta"
+
+xray_reality_install() {
+    banner
+    echo -e "${G}═══ УСТАНОВКА VLESS + XTLS-REALITY ═══${NC}\n"
+    echo "Reality маскирует трафик под обычный HTTPS к реальному сайту."
+    echo "Обходит DPI. Не нужен домен. Работает там где SOCKS5 блокируется."
+    echo ""
+
+    if docker ps -a --format "{{.Names}}" | grep -q "^xray-reality$"; then
+        warn "Xray Reality уже установлен!"
+        pause; return
+    fi
+
+    local REALITY_PORT
+    echo -e "${C}Выберите порт:${NC}"
+    echo "  1) 443  (рекомендуется — максимальная маскировка)"
+    echo "  2) 8443"
+    echo "  3) Свой порт"
+    read -rp "  Выбор [1-3]: " rp
+    case $rp in
+        2) REALITY_PORT=8443 ;;
+        3) read -rp "  Порт: " REALITY_PORT
+           [[ "$REALITY_PORT" =~ ^[0-9]+$ ]] || REALITY_PORT=443 ;;
+        *) REALITY_PORT=443 ;;
+    esac
+
+    if ss -tlnp 2>/dev/null | grep -q ":${REALITY_PORT} "; then
+        warn "Порт $REALITY_PORT уже занят!"
+        read -rp "  Продолжить? [y/N] " force
+        [[ "${force,,}" != "y" ]] && { pause; return; }
+    fi
+
+    # Выбор сайта-донора
+    echo -e "\n${C}Выберите сайт-донор для маскировки:${NC}"
+    echo "  1) www.microsoft.com  (рекомендуется)"
+    echo "  2) www.apple.com"
+    echo "  3) www.google.com"
+    echo "  4) www.cloudflare.com"
+    echo "  5) Свой домен"
+    read -rp "  Выбор [1-5]: " sd
+    local SERVER_NAME DEST
+    case $sd in
+        2) SERVER_NAME="www.apple.com";      DEST="www.apple.com:443" ;;
+        3) SERVER_NAME="www.google.com";     DEST="www.google.com:443" ;;
+        4) SERVER_NAME="www.cloudflare.com"; DEST="www.cloudflare.com:443" ;;
+        5) read -rp "  Домен: " SERVER_NAME
+           SERVER_NAME="${SERVER_NAME//[^a-zA-Z0-9._-]/}"
+           DEST="${SERVER_NAME}:443" ;;
+        *) SERVER_NAME="www.microsoft.com";  DEST="www.microsoft.com:443" ;;
+    esac
+
+    mkdir -p "$REALITY_DIR"
+
+    info "Загрузка образа Xray..."
+    local XRAY_IMAGE="ghcr.io/xtls/xray-core:latest"
+    if ! docker pull "$XRAY_IMAGE" >/dev/null 2>&1; then
+        XRAY_IMAGE="teddysun/xray"
+        docker pull "$XRAY_IMAGE" >/dev/null 2>&1 || die "Не удалось загрузить образ Xray."
+    fi
+    success "Образ загружен: $XRAY_IMAGE"
+
+    info "Генерация ключей x25519, UUID, shortId..."
+    local X25519 PRIVATE_KEY PUBLIC_KEY UUID SHORT_ID
+    X25519=$(docker run --rm "$XRAY_IMAGE" xray x25519 2>/dev/null)
+    PRIVATE_KEY=$(echo "$X25519" | grep "Private key:" | awk '{print $3}')
+    PUBLIC_KEY=$(echo "$X25519" | grep "Public key:" | awk '{print $3}')
+
+    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
+        # Fallback для ghcr образа
+        X25519=$(docker run --rm "$XRAY_IMAGE" x25519 2>/dev/null)
+        PRIVATE_KEY=$(echo "$X25519" | grep -i "private" | awk '{print $NF}')
+        PUBLIC_KEY=$(echo "$X25519" | grep -i "public" | awk '{print $NF}')
+    fi
+
+    [[ -z "$PRIVATE_KEY" ]] && die "Не удалось сгенерировать ключи. Проверь образ Xray."
+
+    UUID=$(cat /proc/sys/kernel/random/uuid)
+    SHORT_ID=$(openssl rand -hex 8)
+
+    info "Создание конфига VLESS-Reality..."
+    cat > "$REALITY_DIR/config.json" << XCONF
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [
+    {
+      "port": $REALITY_PORT,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "$DEST",
+          "xver": 0,
+          "serverNames": ["$SERVER_NAME"],
+          "privateKey": "$PRIVATE_KEY",
+          "shortIds": ["$SHORT_ID"]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {"domainStrategy": "UseIP"}
+    }
+  ]
+}
+XCONF
+
+    # Проверяем JSON
+    if command -v python3 &>/dev/null; then
+        if ! python3 -c "import json; json.load(open('$REALITY_DIR/config.json'))" 2>/dev/null; then
+            die "Конфиг невалидный JSON."
+        fi
+    fi
+
+    info "Запуск контейнера Xray Reality..."
+    if [[ "$XRAY_IMAGE" == *"xtls"* ]]; then
+        docker run -d \
+            --name xray-reality \
+            --restart unless-stopped \
+            -p "$REALITY_PORT:$REALITY_PORT" \
+            -v "$REALITY_DIR:/etc/xray" \
+            --log-opt max-size=10m \
+            --log-opt max-file=3 \
+            "$XRAY_IMAGE" \
+            run -config /etc/xray/config.json >/dev/null 2>&1
+    else
+        docker run -d \
+            --name xray-reality \
+            --restart unless-stopped \
+            -p "$REALITY_PORT:$REALITY_PORT" \
+            -v "$REALITY_DIR:/etc/xray" \
+            --log-opt max-size=10m \
+            --log-opt max-file=3 \
+            "$XRAY_IMAGE" \
+            xray -config /etc/xray/config.json >/dev/null 2>&1
+    fi
+
+    sleep 2
+    if ! docker ps --format "{{.Names}}" | grep -q "^xray-reality$"; then
+        echo -e "${R}Логи:${NC}"
+        docker logs xray-reality 2>&1 | tail -20
+        docker rm xray-reality >/dev/null 2>&1
+        die "Xray Reality не запустился."
+    fi
+
+    _firewall_open "$REALITY_PORT"
+    echo "$REALITY_PORT|$UUID|$PUBLIC_KEY|$PRIVATE_KEY|$SHORT_ID|$SERVER_NAME" > "$REALITY_META"
+    chmod 600 "$REALITY_META"
+    log "VLESS-Reality установлен: порт=$REALITY_PORT donner=$SERVER_NAME"
+
+    local IP
+    IP=$(get_public_ip)
+    local VLESS_LINK="vless://${UUID}@${IP}:${REALITY_PORT}?type=tcp&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SERVER_NAME}&sid=${SHORT_ID}&spx=%2F&flow=xtls-rprx-vision#Reality-${IP}"
+
+    clear
+    echo -e "${G}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${G}║     VLESS + Reality успешно установлен!     ║${NC}"
+    echo -e "${G}╚══════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${C}IP:${NC}           $IP"
+    echo -e "  ${C}Порт:${NC}         $REALITY_PORT"
+    echo -e "  ${C}UUID:${NC}         $UUID"
+    echo -e "  ${C}Public Key:${NC}   $PUBLIC_KEY"
+    echo -e "  ${C}Short ID:${NC}     $SHORT_ID"
+    echo -e "  ${C}Сайт-донор:${NC}   $SERVER_NAME"
+    echo -e "\n  ${W}VLESS ссылка (v2rayNG / Nekobox / Hiddify):${NC}"
+    echo -e "  ${B}$VLESS_LINK${NC}"
+    echo -e "\n  ${Y}QR-код:${NC}"
+    qrencode -t ANSIUTF8 "$VLESS_LINK"
+    echo -e "\n  ${W}Приложения для подключения:${NC}"
+    echo -e "  Android: ${G}v2rayNG${NC} или ${G}Nekobox${NC}"
+    echo -e "  iPhone:  ${G}Streisand${NC} или ${G}Shadowrocket${NC}"
+    echo -e "  Windows: ${G}Hiddify${NC} или ${G}v2rayN${NC}"
+    pause
+}
+
+xray_reality_status() {
+    banner
+    echo -e "${C}═══ СТАТУС VLESS-REALITY ═══${NC}\n"
+
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-reality$"; then
+        warn "Xray Reality не установлен."; pause; return
+    fi
+
+    local STATUS IP
+    STATUS=$(docker inspect --format='{{.State.Status}}' xray-reality 2>/dev/null)
+    IP=$(get_public_ip)
+    local COLOR="${R}"; [[ "$STATUS" == "running" ]] && COLOR="${G}"
+
+    echo -e "  ${W}Статус:${NC}  [${COLOR}${STATUS}${NC}]"
+
+    if [[ -f "$REALITY_META" ]]; then
+        local PORT UUID PK SID SN
+        PORT=$(cut -d'|' -f1 "$REALITY_META")
+        UUID=$(cut -d'|' -f2 "$REALITY_META")
+        PK=$(cut -d'|' -f3 "$REALITY_META")
+        SID=$(cut -d'|' -f5 "$REALITY_META")
+        SN=$(cut -d'|' -f6 "$REALITY_META")
+        local VLESS_LINK="vless://${UUID}@${IP}:${PORT}?type=tcp&security=reality&pbk=${PK}&fp=chrome&sni=${SN}&sid=${SID}&spx=%2F&flow=xtls-rprx-vision#Reality-${IP}"
+
+        echo -e "  ${W}IP:${NC}      $IP"
+        echo -e "  ${W}Порт:${NC}    $PORT"
+        echo -e "  ${W}Донор:${NC}   $SN"
+        echo -e "  ${W}UUID:${NC}    $UUID"
+        echo -e "\n  ${B}$VLESS_LINK${NC}"
+        echo -e "\n  ${Y}QR-код:${NC}"
+        qrencode -t ANSIUTF8 "$VLESS_LINK"
+    fi
+
+    echo -e "\n${C}Трафик:${NC}"
+    docker stats --no-stream --format \
+        "  CPU: {{.CPUPerc}}  RAM: {{.MemUsage}}  NET: {{.NetIO}}" xray-reality 2>/dev/null
+    echo -e "\n${C}Логи (20 строк):${NC}"
+    docker logs --tail=20 xray-reality 2>&1
+    pause
+}
+
+xray_reality_manage() {
+    banner
+    echo -e "${C}═══ УПРАВЛЕНИЕ VLESS-REALITY ═══${NC}\n"
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-reality$"; then
+        warn "Xray Reality не установлен."; pause; return
+    fi
+    local STATUS
+    STATUS=$(docker inspect --format='{{.State.Status}}' xray-reality)
+    local COL="${R}"; [[ "$STATUS" == "running" ]] && COL="${G}"
+    echo -e "  Xray Reality [${COL}${STATUS}${NC}]\n"
+    echo -e "  1) Start   2) Stop   3) Restart"
+    read -rp "  Действие: " act
+    case $act in
+        1) docker start xray-reality >/dev/null && success "Запущен" ;;
+        2) docker stop xray-reality >/dev/null && success "Остановлен" ;;
+        3) docker restart xray-reality >/dev/null && success "Перезапущен" ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    log "Reality управление: $act"
+    pause
+}
+
+xray_reality_delete() {
+    banner
+    echo -e "${R}═══ УДАЛЕНИЕ VLESS-REALITY ═══${NC}\n"
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-reality$"; then
+        warn "Xray Reality не установлен."; pause; return
+    fi
+    read -rp "  Удалить Xray Reality? [y/N] " confirm
+    [[ "${confirm,,}" != "y" ]] && return
+
+    local PORT=""
+    [[ -f "$REALITY_META" ]] && PORT=$(cut -d'|' -f1 "$REALITY_META")
+
+    docker stop xray-reality >/dev/null 2>&1
+    docker rm xray-reality >/dev/null 2>&1
+    rm -f "$REALITY_META"
+
+    if [[ -n "$PORT" && "$PORT" =~ ^[0-9]+$ ]]; then
+        read -rp "  Закрыть порт $PORT в firewall? [y/N] " fw
+        [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
+    fi
+
+    success "Xray Reality удалён."
+    log "Xray Reality удалён"
+    pause
+}
+
+xray_reality_menu() {
+    while true; do
+        banner
+        echo -e "${W}  ── VLESS + XTLS-Reality (Anti-DPI) ──${NC}\n"
+        echo -e "  ${G}1)${NC} Установить VLESS+Reality"
+        echo -e "  ${C}2)${NC} Статус и ссылка/QR"
+        echo -e "  ${Y}3)${NC} Start / Stop / Restart"
+        echo -e "  ${R}4)${NC} Удалить"
+        echo -e "  ${DIM}0)${NC} Назад\n"
+        read -rp "  Пункт: " choice
+        case $choice in
+            1) xray_reality_install ;;
+            2) xray_reality_status ;;
+            3) xray_reality_manage ;;
+            4) xray_reality_delete ;;
+            0) return ;;
+            *) warn "Неверный ввод." ;;
+        esac
+    done
+}
