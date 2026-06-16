@@ -75,7 +75,65 @@ is_valid_index() {
 }
 
 is_valid_domain() {
-    [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,}$ ]]
+    [[ ${#1} -le 253 && "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,}$ ]]
+}
+
+read_bounded() {
+    local prompt="$1" outvar="$2" max="${3:-128}" value
+    read -rp "$prompt" value
+    if (( ${#value} > max )); then
+        warn "Слишком длинный ввод (макс. $max символов)."
+        printf -v "$outvar" '%s' ""
+        return 1
+    fi
+    printf -v "$outvar" '%s' "$value"
+}
+
+read_secret_bounded() {
+    local prompt="$1" outvar="$2" max="${3:-128}" value
+    read -rsp "$prompt" value
+    echo ""
+    if (( ${#value} > max )); then
+        warn "Слишком длинный ввод (макс. $max символов)."
+        printf -v "$outvar" '%s' ""
+        return 1
+    fi
+    printf -v "$outvar" '%s' "$value"
+}
+
+read_choice() {
+    local prompt="$1" outvar="$2" allowed="$3" value
+    read_bounded "$prompt" value 16 || return 1
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        warn "Введите номер пункта."
+        printf -v "$outvar" '%s' ""
+        return 1
+    fi
+    if [[ -n "$allowed" && " $allowed " != *" $value "* ]]; then
+        warn "Неверный пункт: $value"
+        printf -v "$outvar" '%s' ""
+        return 1
+    fi
+    printf -v "$outvar" '%s' "$value"
+}
+
+validate_json_file() {
+    local file="$1"
+    python3 - "$file" << 'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        json.load(fh)
+except json.JSONDecodeError as exc:
+    print(f"JSON error in {path}: line {exc.lineno}, column {exc.colno}: {exc.msg}", file=sys.stderr)
+    sys.exit(1)
+except OSError as exc:
+    print(f"Cannot read {path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
 }
 
 is_systemd_available() {
@@ -275,10 +333,10 @@ choose_domain() {
     echo -e "${DIM}    0) Ввести свой домен${NC}\n"
 
     local choice
-    read -rp "  Выбор [0-${#DOMAINS[@]}]: " choice
+    read_bounded "  Выбор [0-${#DOMAINS[@]}]: " choice 16 || { CHOSEN_DOMAIN="google.com"; return; }
 
     if [[ "$choice" == "0" ]]; then
-        read -rp "  Введите домен: " CHOSEN_DOMAIN
+        read_bounded "  Введите домен: " CHOSEN_DOMAIN 253 || CHOSEN_DOMAIN="google.com"
         CHOSEN_DOMAIN="${CHOSEN_DOMAIN//[^a-zA-Z0-9._-]/}"
         if ! is_valid_domain "$CHOSEN_DOMAIN"; then
             warn "Некорректный домен, используется google.com"
@@ -378,7 +436,7 @@ choose_port() {
     echo "  3) 3128"
     echo "  4) 1080  (SOCKS)"
     echo "  5) Свой порт"
-    read -rp "  Выбор [1-5]: " pc
+    read_choice "  Выбор [1-5]: " pc "1 2 3 4 5" || { warn "Используется 443."; CHOSEN_PORT=443; }
 
     case $pc in
         1) CHOSEN_PORT=443  ;;
@@ -386,7 +444,7 @@ choose_port() {
         3) CHOSEN_PORT=3128 ;;
         4) CHOSEN_PORT=1080 ;;
         5)
-            read -rp "  Порт: " CHOSEN_PORT
+            read_bounded "  Порт: " CHOSEN_PORT 16 || CHOSEN_PORT=443
             is_valid_port "$CHOSEN_PORT" || { warn "Некорректный порт, используется 443."; CHOSEN_PORT=443; }
             ;;
         *)
@@ -425,7 +483,7 @@ choose_port() {
     # Занят сторонним процессом?
     if ss -tlnp 2>/dev/null | grep -q ":${CHOSEN_PORT} "; then
         warn "Порт $CHOSEN_PORT занят сторонним процессом!"
-        read -rp "  Принудительно использовать? [y/N] " force
+        read_bounded "  Принудительно использовать? [y/N] " force 8 || force="n"
         [[ "${force,,}" != "y" ]] && return 1
     fi
 
@@ -433,7 +491,7 @@ choose_port() {
     local fw_s; fw_s=$(_port_fw_status "$CHOSEN_PORT")
     if [[ "$fw_s" == "closed" ]]; then
         warn "Порт $CHOSEN_PORT закрыт в firewall!"
-        read -rp "  Открыть автоматически? [Y/n] " fw_open
+        read_bounded "  Открыть автоматически? [Y/n] " fw_open 8 || fw_open="n"
         if [[ "${fw_open,,}" != "n" ]]; then
             _firewall_open "$CHOSEN_PORT"
         else
@@ -450,8 +508,12 @@ menu_add() {
     banner
     echo -e "${G}═══ СОЗДАНИЕ НОВОГО ПРОКСИ ═══${NC}\n"
 
-    read -rp "Имя клиента (ID/ник, без пробелов): " CLIENT_ID
+    read_bounded "Имя клиента (ID/ник, без пробелов): " CLIENT_ID 64 || CLIENT_ID=""
     CLIENT_ID="${CLIENT_ID//[^a-zA-Z0-9_-]/}"
+    if [[ ${#CLIENT_ID} -gt 32 ]]; then
+        warn "Имя клиента обрезано до 32 символов."
+        CLIENT_ID="${CLIENT_ID:0:32}"
+    fi
     [[ -z "$CLIENT_ID" ]] && CLIENT_ID="client-$(date +%s)"
 
     local CONTAINER_NAME="mtproto-$CLIENT_ID"
@@ -569,14 +631,14 @@ firewall_menu() {
     echo -e "  1) Открыть порт прокси в firewall"
     echo -e "  2) Закрыть порт прокси в firewall"
     echo -e "  3) Показать статус firewall\n"
-    read -rp "Выбор: " fc
+    read_choice "Выбор: " fc "1 2 3" || { pause; return; }
 
     case $fc in
         1|2)
             for i in "${!containers[@]}"; do
                 echo -e "  ${Y}$((i+1)))${NC} ${containers[$i]}"
             done
-            read -rp "Номер: " IDX
+            read_bounded "Номер: " IDX 16 || { pause; return; }
             is_valid_index "$IDX" "${#containers[@]}" || { warn "Неверный выбор."; pause; return; }
             local CONTAINER="${containers[$((IDX-1))]}"
             local PORT
@@ -652,8 +714,9 @@ show_list() {
 
 show_detail() {
     banner
-    read -rp "ID клиента: " CLIENT_ID
+    read_bounded "ID клиента: " CLIENT_ID 64 || { pause; return; }
     CLIENT_ID="${CLIENT_ID//[^a-zA-Z0-9_-]/}"
+    CLIENT_ID="${CLIENT_ID:0:32}"
     local CONTAINER="mtproto-$CLIENT_ID"
 
     if ! docker ps -a --format "{{.Names}}" | grep -q "^$CONTAINER$"; then
@@ -701,8 +764,9 @@ rotate_secret() {
     echo -e "${Y}═══ ОБНОВЛЕНИЕ СЕКРЕТА ═══${NC}"
     warn "Все текущие соединения будут разорваны."
     echo ""
-    read -rp "ID клиента: " CLIENT_ID
+    read_bounded "ID клиента: " CLIENT_ID 64 || { pause; return; }
     CLIENT_ID="${CLIENT_ID//[^a-zA-Z0-9_-]/}"
+    CLIENT_ID="${CLIENT_ID:0:32}"
     local CONTAINER="mtproto-$CLIENT_ID"
 
     if ! docker ps -a --format "{{.Names}}" | grep -q "^$CONTAINER$"; then
@@ -839,13 +903,13 @@ manage_proxy() {
     done
 
     echo ""
-    read -rp "Номер контейнера: " IDX
+    read_bounded "Номер контейнера: " IDX 16 || { pause; return; }
     is_valid_index "$IDX" "${#containers[@]}" || { warn "Неверный выбор."; pause; return; }
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
 
     echo -e "\n  1) Start   2) Stop   3) Restart"
-    read -rp "Действие: " ACT
+    read_choice "Действие: " ACT "1 2 3" || { pause; return; }
     case $ACT in
         1) docker start "$CONTAINER" >/dev/null && success "Запущен: $CONTAINER" ;;
         2) docker stop "$CONTAINER" >/dev/null && success "Остановлен: $CONTAINER" ;;
@@ -870,14 +934,14 @@ delete_proxy() {
     done
 
     echo ""
-    read -rp "Номер для удаления (0 — отмена): " IDX
+    read_bounded "Номер для удаления (0 — отмена): " IDX 16 || { pause; return; }
     [[ "$IDX" == "0" ]] && return
     is_valid_index "$IDX" "${#containers[@]}" || { warn "Неверный выбор."; pause; return; }
 
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
 
-    read -rp "Удалить '$CONTAINER'? [y/N] " confirm
+    read_bounded "Удалить '$CONTAINER'? [y/N] " confirm 8 || confirm="n"
     [[ "${confirm,,}" != "y" ]] && return
 
     local PORT
@@ -892,7 +956,7 @@ delete_proxy() {
     sed -i "/^$CONTAINER|/d" "$CONFIG_FILE"
 
     # Закрыть порт в firewall
-    read -rp "Закрыть порт $PORT в firewall? [y/N] " fw
+    read_bounded "Закрыть порт $PORT в firewall? [y/N] " fw 8 || fw="n"
     [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
 
     success "Удалён: $CONTAINER"
@@ -1018,7 +1082,7 @@ setup_healthcheck() {
     echo "  1) Включить healthcheck"
     echo "  2) Отключить healthcheck"
     echo "  3) Показать статус"
-    read -rp "Выбор: " hc
+    read_choice "Выбор: " hc "1 2 3" || { pause; return; }
 
     case $hc in
         1)
@@ -1068,7 +1132,7 @@ setup_auto_rotate() {
     echo "  2) Каждый месяц (1-е число 03:00)"
     echo "  3) Отключить авто-rotate"
     echo "  4) Показать статус"
-    read -rp "Выбор: " ar
+    read_choice "Выбор: " ar "1 2 3 4" || { pause; return; }
 
     case $ar in
         1|2)
@@ -1147,7 +1211,7 @@ setup_tg_notify() {
     echo "  1) Настроить уведомления"
     echo "  2) Тест уведомления"
     echo "  3) Отключить уведомления"
-    read -rp "Выбор: " tn
+    read_choice "Выбор: " tn "1 2 3" || { pause; return; }
 
     local NOTIFY_CONF="$CONFIG_DIR/notify.conf"
 
@@ -1156,8 +1220,8 @@ setup_tg_notify() {
             echo ""
             echo -e "${C}Создай бота через @BotFather и получи токен.${NC}"
             echo -e "${C}Свой chat_id узнай через @userinfobot.${NC}\n"
-            read -rp "Bot Token: " BOT_TOKEN
-            read -rp "Chat ID:   " CHAT_ID
+            read_bounded "Bot Token: " BOT_TOKEN 128 || { pause; return; }
+            read_bounded "Chat ID:   " CHAT_ID 32 || { pause; return; }
             BOT_TOKEN="${BOT_TOKEN//[^a-zA-Z0-9:_-]/}"
             CHAT_ID="${CHAT_ID//[^0-9-]/}"
 
@@ -1274,7 +1338,7 @@ self_update() {
         rm -f "$TMP"; pause; return
     fi
 
-    read -rp "Обновить до v$NEW_VER? [y/N] " confirm
+    read_bounded "Обновить до v$NEW_VER? [y/N] " confirm 8 || confirm="n"
     if [[ "${confirm,,}" != "y" ]]; then
         warn "Отменено."; rm -f "$TMP"; pause; return
     fi
@@ -1308,7 +1372,7 @@ full_uninstall() {
     echo -e "${R}║       ПОЛНОЕ УДАЛЕНИЕ MTPROXY        ║${NC}"
     echo -e "${R}╚══════════════════════════════════════╝${NC}\n"
     warn "Будут удалены ВСЕ прокси-контейнеры и сам скрипт."
-    read -rp "Подтвердите: напишите DELETE: " confirm
+    read_bounded "Подтвердите: напишите DELETE: " confirm 16 || confirm=""
     [[ "$confirm" != "DELETE" ]] && { warn "Отменено."; pause; return; }
 
     local ids
@@ -1355,12 +1419,12 @@ xray_install() {
     echo "  2) 3129"
     echo "  3) 8080"
     echo "  4) Свой порт"
-    read -rp "  Выбор [1-4]: " xp
+    read_choice "  Выбор [1-4]: " xp "1 2 3 4" || xp=1
     case $xp in
         1) XRAY_PORT=1080 ;;
         2) XRAY_PORT=3129 ;;
         3) XRAY_PORT=8080 ;;
-        4) read -rp "  Порт: " XRAY_PORT
+        4) read_bounded "  Порт: " XRAY_PORT 16 || XRAY_PORT=1080
            is_valid_port "$XRAY_PORT" || XRAY_PORT=1080 ;;
         *) XRAY_PORT=1080 ;;
     esac
@@ -1372,7 +1436,7 @@ xray_install() {
     for check_port in "$XRAY_PORT" "$XRAY_HTTP_PORT"; do
         if ss -tlnp 2>/dev/null | grep -q ":${check_port} "; then
             warn "Порт $check_port уже занят другим процессом!"
-            read -rp "  Принудительно использовать? [y/N] " force
+            read_bounded "  Принудительно использовать? [y/N] " force 8 || force="n"
             [[ "${force,,}" != "y" ]] && { pause; return; }
         fi
     done
@@ -1394,12 +1458,12 @@ xray_install() {
     echo -e "\n${C}Защита паролем:${NC}"
     echo "  1) С логином и паролем (рекомендуется)"
     echo "  2) Без пароля (опасно: публичный open proxy)"
-    read -rp "  Выбор [1-2]: " xa
+    read_choice "  Выбор [1-2]: " xa "1 2" || xa=1
 
     local XRAY_USER="" XRAY_PASS="" XRAY_AUTH_TYPE="password"
     if [[ "$xa" == "2" ]]; then
         warn "Открытый SOCKS5/HTTP прокси будет доступен всем, кто найдёт порт."
-        read -rp "  Напиши OPEN чтобы подтвердить: " open_confirm
+        read_bounded "  Напиши OPEN чтобы подтвердить: " open_confirm 16 || open_confirm=""
         if [[ "$open_confirm" == "OPEN" ]]; then
             XRAY_AUTH_TYPE="noauth"
             info "Открытый доступ (без пароля)"
@@ -1410,12 +1474,11 @@ xray_install() {
     fi
 
     if [[ "$XRAY_AUTH_TYPE" == "password" ]]; then
-        read -rp "  Логин [proxy]: " XRAY_USER
+        read_bounded "  Логин [proxy]: " XRAY_USER 64 || XRAY_USER="proxy"
         XRAY_USER="${XRAY_USER:-proxy}"
         XRAY_USER="${XRAY_USER//[^a-zA-Z0-9_.-]/}"
         XRAY_USER="${XRAY_USER:-proxy}"
-        read -rsp "  Пароль (Enter = сгенерировать): " XRAY_PASS
-        echo ""
+        read_secret_bounded "  Пароль (Enter = сгенерировать): " XRAY_PASS 64 || XRAY_PASS=""
         XRAY_PASS="${XRAY_PASS//[^a-zA-Z0-9_.-]/}"
         [[ -z "$XRAY_PASS" ]] && XRAY_PASS="$(random_password)"
         XRAY_AUTH_TYPE="password"
@@ -1501,10 +1564,8 @@ XCONF
 
     # Проверяем JSON
     if command -v python3 &>/dev/null; then
-        if ! python3 -c "import json; json.load(open('$XRAY_DIR/config.json'))" 2>/dev/null; then
-            warn "Ошибка в конфиге! Содержимое:"
-            cat "$XRAY_DIR/config.json"
-            die "Конфиг невалидный."
+        if ! validate_json_file "$XRAY_DIR/config.json"; then
+            die "Конфиг Xray невалидный. Файл не выводится, потому что может содержать логин/пароль: $XRAY_DIR/config.json"
         fi
         success "Конфиг Xray валидный."
     fi
@@ -1674,7 +1735,7 @@ xray_manage() {
     echo -e "  Xray [${COLOR}${STATUS}${NC}]
 "
     echo -e "  1) Start   2) Stop   3) Restart"
-    read -rp "  Действие: " act
+    read_choice "  Действие: " act "1 2 3" || { pause; return; }
     case $act in
         1) docker start xray-proxy >/dev/null && success "Запущен" ;;
         2) docker stop xray-proxy >/dev/null && success "Остановлен" ;;
@@ -1694,7 +1755,7 @@ xray_delete() {
         warn "Xray не установлен."; pause; return
     fi
 
-    read -rp "  Удалить Xray SOCKS5? [y/N] " confirm
+    read_bounded "  Удалить Xray SOCKS5? [y/N] " confirm 8 || confirm="n"
     [[ "${confirm,,}" != "y" ]] && return
 
     # Читаем порты ДО удаления контейнера и конфига
@@ -1714,13 +1775,13 @@ xray_delete() {
     # Закрываем порты в firewall — защита от пустых значений
     if [[ -n "$SOCKS_PORT" && "$SOCKS_PORT" =~ ^[0-9]+$ ]]; then
         if [[ -n "$HTTP_PORT" && "$HTTP_PORT" =~ ^[0-9]+$ ]]; then
-            read -rp "  Закрыть порты $SOCKS_PORT и $HTTP_PORT в firewall? [y/N] " fw
+            read_bounded "  Закрыть порты $SOCKS_PORT и $HTTP_PORT в firewall? [y/N] " fw 8 || fw="n"
             if [[ "${fw,,}" == "y" ]]; then
                 _firewall_close "$SOCKS_PORT"
                 _firewall_close "$HTTP_PORT"
             fi
         else
-            read -rp "  Закрыть порт $SOCKS_PORT в firewall? [y/N] " fw
+            read_bounded "  Закрыть порт $SOCKS_PORT в firewall? [y/N] " fw 8 || fw="n"
             [[ "${fw,,}" == "y" ]] && _firewall_close "$SOCKS_PORT"
         fi
     fi
@@ -1738,7 +1799,7 @@ install_all() {
     echo "  • Telegram MTProxy с Fake TLS"
     echo "  • Xray SOCKS5 (WhatsApp / универсальный)"
     echo ""
-    read -rp "Продолжить? [Y/n] " confirm
+    read_bounded "Продолжить? [Y/n] " confirm 8 || confirm="n"
     [[ "${confirm,,}" == "n" ]] && return
 
     menu_add
@@ -1759,7 +1820,7 @@ xray_menu() {
         echo -e "  ${DIM}0)${NC} Назад
 "
 
-        read -rp "  Пункт: " choice
+        read_choice "  Пункт: " choice "0 1 2 3 4" || { pause; continue; }
         case $choice in
             1) xray_install ;;
             2) xray_status ;;
@@ -2001,7 +2062,7 @@ warp_install() {
     fi
 
     local WARP_PORT WARP_HTTP_PORT mode listen bind_prefix user pass license_key
-    read -rp "  SOCKS5 порт [40000]: " WARP_PORT
+    read_bounded "  SOCKS5 порт [40000]: " WARP_PORT 16 || { pause; return; }
     WARP_PORT="${WARP_PORT:-40000}"
     is_valid_port "$WARP_PORT" || { warn "Некорректный порт."; pause; return; }
     WARP_HTTP_PORT=$((WARP_PORT + 1))
@@ -2017,7 +2078,7 @@ warp_install() {
     echo -e "\n${C}Доступ:${NC}"
     echo "  1) Публичный 0.0.0.0 с логином/паролем"
     echo "  2) Только localhost 127.0.0.1"
-    read -rp "  Выбор [1-2]: " mode
+    read_choice "  Выбор [1-2]: " mode "1 2" || mode=1
     if [[ "$mode" == "2" ]]; then
         listen="127.0.0.1"
         bind_prefix="127.0.0.1:"
@@ -2026,17 +2087,16 @@ warp_install() {
         bind_prefix=""
     fi
 
-    read -rp "  Логин [warp]: " user
+    read_bounded "  Логин [warp]: " user 64 || user="warp"
     user="${user:-warp}"
     user="${user//[^a-zA-Z0-9_.-]/}"
     user="${user:-warp}"
-    read -rsp "  Пароль (Enter = сгенерировать): " pass
-    echo ""
+    read_secret_bounded "  Пароль (Enter = сгенерировать): " pass 64 || pass=""
     pass="${pass//[^a-zA-Z0-9_.-]/}"
     [[ -z "$pass" ]] && pass="$(random_password)"
 
     echo ""
-    read -rp "  WARP+ license key (Enter = бесплатный WARP): " license_key
+    read_bounded "  WARP+ license key (Enter = бесплатный WARP): " license_key 128 || license_key=""
     license_key="${license_key//[^a-zA-Z0-9_-]/}"
 
     _warp_generate_profile "$license_key"
@@ -2163,7 +2223,7 @@ warp_manage() {
     status=$(docker inspect --format='{{.State.Status}}' xray-warp)
     echo -e "  xray-warp: ${Y}$status${NC}\n"
     echo "  1) Start   2) Stop   3) Restart"
-    read -rp "  Действие: " act
+    read_choice "  Действие: " act "1 2 3" || { pause; return; }
     case $act in
         1) docker start xray-warp >/dev/null && success "Запущен" ;;
         2) docker stop xray-warp >/dev/null && success "Остановлен" ;;
@@ -2179,7 +2239,7 @@ warp_delete() {
     if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-warp$"; then
         warn "WARP proxy не установлен."; pause; return
     fi
-    read -rp "  Удалить WARP proxy? [y/N] " confirm
+    read_bounded "  Удалить WARP proxy? [y/N] " confirm 8 || confirm="n"
     [[ "${confirm,,}" != "y" ]] && return
 
     local port http_port listen
@@ -2194,7 +2254,7 @@ warp_delete() {
     rm -f "$WARP_CONF"
 
     if [[ "$listen" == "0.0.0.0" && -n "$port" && -n "$http_port" ]]; then
-        read -rp "  Закрыть порты $port и $http_port в firewall? [y/N] " fw
+        read_bounded "  Закрыть порты $port и $http_port в firewall? [y/N] " fw 8 || fw="n"
         if [[ "${fw,,}" == "y" ]]; then
             _firewall_close "$port"
             _firewall_close "$http_port"
@@ -2215,7 +2275,7 @@ warp_menu() {
         echo -e "  ${Y}3)${NC} Start / Stop / Restart"
         echo -e "  ${R}4)${NC} Удалить WARP proxy"
         echo -e "  ${DIM}0)${NC} Назад\n"
-        read -rp "  Пункт: " choice
+        read_choice "  Пункт: " choice "0 1 2 3 4" || { pause; continue; }
         case $choice in
             1) warp_install ;;
             2) warp_status ;;
@@ -2610,15 +2670,15 @@ setup_tg_bot() {
     echo -e "  ${Y}3)${NC} Остановить бота"
     echo -e "  ${DIM}4)${NC} Лог бота"
     echo -e "  ${DIM}0)${NC} Назад\n"
-    read -rp "  Пункт: " bc
+    read_choice "  Пункт: " bc "0 1 2 3 4" || { pause; return; }
 
     case $bc in
         1)
             echo ""
             echo -e "${C}1. Создай бота через @BotFather — получи токен.${NC}"
             echo -e "${C}2. Свой chat_id узнай через @userinfobot.${NC}\n"
-            read -rp "  Bot Token: " BOT_TOKEN
-            read -rp "  Твой Chat ID: " BOT_ADMIN_ID
+            read_bounded "  Bot Token: " BOT_TOKEN 128 || { pause; return; }
+            read_bounded "  Твой Chat ID: " BOT_ADMIN_ID 32 || { pause; return; }
             BOT_TOKEN="${BOT_TOKEN//[^a-zA-Z0-9:_-]/}"
             BOT_ADMIN_ID="${BOT_ADMIN_ID//[^0-9-]/}"
 
@@ -2763,7 +2823,7 @@ main_menu() {
         echo -e "  ${R}19)${NC} Полное удаление"
         echo -e "  ${DIM}0)${NC}  Выход\n"
 
-        read -rp "  Пункт: " choice
+        read_choice "  Пункт: " choice "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21" || { pause; continue; }
         case $choice in
             1)  menu_add ;;
             2)  show_list ;;
@@ -2816,17 +2876,17 @@ xray_reality_install() {
     echo "  1) 443  (рекомендуется — максимальная маскировка)"
     echo "  2) 8443"
     echo "  3) Свой порт"
-    read -rp "  Выбор [1-3]: " rp
+    read_choice "  Выбор [1-3]: " rp "1 2 3" || rp=1
     case $rp in
         2) REALITY_PORT=8443 ;;
-        3) read -rp "  Порт: " REALITY_PORT
+        3) read_bounded "  Порт: " REALITY_PORT 16 || REALITY_PORT=443
            is_valid_port "$REALITY_PORT" || REALITY_PORT=443 ;;
         *) REALITY_PORT=443 ;;
     esac
 
     if ss -tlnp 2>/dev/null | grep -q ":${REALITY_PORT} "; then
         warn "Порт $REALITY_PORT уже занят!"
-        read -rp "  Продолжить? [y/N] " force
+        read_bounded "  Продолжить? [y/N] " force 8 || force="n"
         [[ "${force,,}" != "y" ]] && { pause; return; }
     fi
 
@@ -2837,13 +2897,13 @@ xray_reality_install() {
     echo "  3) www.google.com"
     echo "  4) www.cloudflare.com"
     echo "  5) Свой домен"
-    read -rp "  Выбор [1-5]: " sd
+    read_choice "  Выбор [1-5]: " sd "1 2 3 4 5" || sd=1
     local SERVER_NAME DEST
     case $sd in
         2) SERVER_NAME="www.apple.com";      DEST="www.apple.com:443" ;;
         3) SERVER_NAME="www.google.com";     DEST="www.google.com:443" ;;
         4) SERVER_NAME="www.cloudflare.com"; DEST="www.cloudflare.com:443" ;;
-        5) read -rp "  Домен: " SERVER_NAME
+        5) read_bounded "  Домен: " SERVER_NAME 253 || SERVER_NAME="www.microsoft.com"
            SERVER_NAME="${SERVER_NAME//[^a-zA-Z0-9._-]/}"
            is_valid_domain "$SERVER_NAME" || SERVER_NAME="www.microsoft.com"
            DEST="${SERVER_NAME}:443" ;;
@@ -2922,7 +2982,7 @@ XCONF
 
     # Проверяем JSON
     if command -v python3 &>/dev/null; then
-        if ! python3 -c "import json; json.load(open('$REALITY_DIR/config.json'))" 2>/dev/null; then
+        if ! validate_json_file "$REALITY_DIR/config.json"; then
             die "Конфиг невалидный JSON."
         fi
     fi
@@ -3040,7 +3100,7 @@ xray_reality_manage() {
     local COL="${R}"; [[ "$STATUS" == "running" ]] && COL="${G}"
     echo -e "  Xray Reality [${COL}${STATUS}${NC}]\n"
     echo -e "  1) Start   2) Stop   3) Restart"
-    read -rp "  Действие: " act
+    read_choice "  Действие: " act "1 2 3" || { pause; return; }
     case $act in
         1) docker start xray-reality >/dev/null && success "Запущен" ;;
         2) docker stop xray-reality >/dev/null && success "Остановлен" ;;
@@ -3057,7 +3117,7 @@ xray_reality_delete() {
     if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-reality$"; then
         warn "Xray Reality не установлен."; pause; return
     fi
-    read -rp "  Удалить Xray Reality? [y/N] " confirm
+    read_bounded "  Удалить Xray Reality? [y/N] " confirm 8 || confirm="n"
     [[ "${confirm,,}" != "y" ]] && return
 
     local PORT=""
@@ -3068,7 +3128,7 @@ xray_reality_delete() {
     rm -f "$REALITY_META"
 
     if [[ -n "$PORT" && "$PORT" =~ ^[0-9]+$ ]]; then
-        read -rp "  Закрыть порт $PORT в firewall? [y/N] " fw
+        read_bounded "  Закрыть порт $PORT в firewall? [y/N] " fw 8 || fw="n"
         [[ "${fw,,}" == "y" ]] && _firewall_close "$PORT"
     fi
 
@@ -3086,7 +3146,7 @@ xray_reality_menu() {
         echo -e "  ${Y}3)${NC} Start / Stop / Restart"
         echo -e "  ${R}4)${NC} Удалить"
         echo -e "  ${DIM}0)${NC} Назад\n"
-        read -rp "  Пункт: " choice
+        read_choice "  Пункт: " choice "0 1 2 3 4" || { pause; continue; }
         case $choice in
             1) xray_reality_install ;;
             2) xray_reality_status ;;

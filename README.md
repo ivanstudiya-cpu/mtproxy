@@ -123,7 +123,9 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivan-yurich/mtproxy/main/mt
 
 - `umask 077`, `chmod 600/700` и отдельные helper-функции для файлов с токенами, секретами, WARP-профилями и migration/export файлами
 - строгая валидация портов, индексов меню и доменов перед Docker/firewall операциями
+- централизованный ввод пользователя с лимитами длины для пунктов меню, токенов, ID, паролей и WARP-ключей
 - Xray SOCKS5 больше не создаёт публичный open proxy по умолчанию: пароль включён сразу, открытый режим требует явного подтверждения `OPEN`
+- JSON-конфиги с логинами и паролями больше не выводятся в терминал при ошибке проверки
 - firewall helper не добавляет дублирующиеся iptables-правила и отказывается работать с некорректными портами
 - `--bot-daemon` и systemd-режим Telegram-бота исправлены, чтобы бот не запускался вторым polling-процессом
 - self-update проверяет скачанный скрипт через `bash -n` перед заменой `/usr/local/bin/mtproxy`
@@ -176,6 +178,8 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivan-yurich/mtproxy/main/mt
 - Xray SOCKS5 больше не поднимает open proxy по умолчанию
 - Усилены права доступа к конфигам, экспортам, миграциям и WARP-профилям
 - Добавлены проверки портов, доменов и индексов меню
+- Централизован ввод пользователя и добавлены лимиты длины для чувствительных значений
+- JSON-конфиги с секретами больше не печатаются при ошибке проверки
 - Self-update проверяет синтаксис скачанного файла
 - Rotate секрета стал безопаснее при ошибках генерации или старта контейнера
 
@@ -297,7 +301,9 @@ Host: your_server_ip   Port: 1081   Type: HTTP
 - Major security hardening pass across the bash script
 - `umask 077`, `chmod 600/700`, and helpers for secret configs, exports, migrations, and WARP profiles
 - Strict validation for ports, menu indexes, and domains before Docker/firewall operations
+- Centralized bounded input helpers for menu choices, tokens, IDs, passwords, and WARP keys
 - Xray SOCKS5 no longer creates a public open proxy by default
+- Sensitive Xray JSON configs are not printed to the terminal when validation fails
 - Telegram bot daemon mode is fixed for systemd and avoids duplicate polling processes
 - Self-update validates downloaded scripts with `bash -n` before replacing `/usr/local/bin/mtproxy`
 - Secret rotation is safer when generation or container startup fails
