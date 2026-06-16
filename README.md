@@ -2,16 +2,16 @@
 
 # 🔒 Messenger Proxy Manager
 
-### Telegram MTProxy · Xray SOCKS5 · VLESS+Reality
+### Telegram MTProxy · Xray SOCKS5 · VLESS+Reality · Cloudflare WARP
 ### Всё в одном bash-скрипте. Работает за 1 минуту.
 
-[![Version](https://img.shields.io/badge/version-5.0-blue?style=for-the-badge)](https://github.com/ivanstudiya-cpu/mtproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.1-blue?style=for-the-badge)](https://github.com/ivan-yurich/mtproxy/releases)
 [![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-required-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
-[![Stars](https://img.shields.io/github/stars/ivanstudiya-cpu/mtproxy?style=for-the-badge&color=yellow)](https://github.com/ivanstudiya-cpu/mtproxy/stargazers)
-[![ShellCheck](https://img.shields.io/badge/shellcheck-passing-brightgreen?style=for-the-badge)](https://www.shellcheck.net)
+[![Stars](https://img.shields.io/github/stars/ivan-yurich/mtproxy?style=for-the-badge&color=yellow)](https://github.com/ivan-yurich/mtproxy/stargazers)
+[![Security](https://img.shields.io/badge/security-hardened-brightgreen?style=for-the-badge)](#-безопасность)
 
-**[🇷🇺 Русский](#-быстрая-установка) · [🇬🇧 English](#-quick-install) · [⭐ Star on GitHub](https://github.com/ivanstudiya-cpu/mtproxy)**
+**[🇷🇺 Русский](#-быстрая-установка) · [🇬🇧 English](#-quick-install) · [⭐ Star on GitHub](https://github.com/ivan-yurich/mtproxy)**
 
 </div>
 
@@ -27,6 +27,7 @@
 ✅ Telegram MTProxy  — встроен в Telegram, не нужен VPN, Fake TLS маскировка
 ✅ Xray SOCKS5       — для WhatsApp, Instagram, браузера (HTTP + SOCKS5)
 ✅ VLESS + Reality   — обходит DPI, маскируется под обычный HTTPS
+✅ Cloudflare WARP   — отдельный SOCKS5/HTTP прокси с outbound через WARP
 ✅ Telegram-бот      — управление прокси прямо из Telegram
 ✅ Один скрипт       — установка, управление, мониторинг, автообновление
 ```
@@ -34,7 +35,7 @@
 ### ⚡ Быстрая установка
 
 ```bash
-wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh \
+wget -O mtproxy.sh https://raw.githubusercontent.com/ivan-yurich/mtproxy/main/mtproxy.sh \
   && chmod +x mtproxy.sh \
   && sudo ./mtproxy.sh
 ```
@@ -63,6 +64,7 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
   ── Xray SOCKS5 (WhatsApp / универсальный) ──
   10) Меню Xray SOCKS5
+  21) Меню Cloudflare WARP
   11) Установить Telegram + Xray
 
   ── Система ──
@@ -88,6 +90,14 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
 Приложения: **v2rayNG** / **Nekobox** (Android), **Streisand** / **Shadowrocket** (iPhone), **Hiddify** (Windows).
 
+#### 🟢 Cloudflare WARP proxy
+Отдельный `xray-warp` контейнер: входящие SOCKS5/HTTP подключения идут через Xray WireGuard outbound в Cloudflare WARP. Режим не меняет маршруты всего VPS и не трогает SSH, поэтому его безопаснее использовать на рабочем сервере.
+
+- публичный режим с обязательным логином и паролем
+- localhost-only режим для локальных проверок на сервере
+- автоматическая генерация WARP-профиля через `wgcf`
+- проверка через Cloudflare trace (`warp=on` / `warp=plus`)
+
 ---
 
 ### 🤖 Telegram-бот управления
@@ -109,13 +119,16 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
 ### 🔒 Безопасность
 
-- Временные файлы через `mktemp` — защита от symlink-атак
-- Санитизация всех входных данных от пользователя
-- `chmod 600` на все конфиги с секретами
-- Валидация портов (1-65535) и доменов по regex
-- Systemd unit для бота — изолированный процесс
-- Логротация `/var/log/mtproxy.log` через logrotate
-- ShellCheck — 0 warnings
+В этой версии проделана большая работа по безопасности и отказоустойчивости:
+
+- `umask 077`, `chmod 600/700` и отдельные helper-функции для файлов с токенами, секретами, WARP-профилями и migration/export файлами
+- строгая валидация портов, индексов меню и доменов перед Docker/firewall операциями
+- Xray SOCKS5 больше не создаёт публичный open proxy по умолчанию: пароль включён сразу, открытый режим требует явного подтверждения `OPEN`
+- firewall helper не добавляет дублирующиеся iptables-правила и отказывается работать с некорректными портами
+- `--bot-daemon` и systemd-режим Telegram-бота исправлены, чтобы бот не запускался вторым polling-процессом
+- self-update проверяет скачанный скрипт через `bash -n` перед заменой `/usr/local/bin/mtproxy`
+- rotate секрета не удаляет рабочий контейнер, если новый секрет не сгенерировался, и пробует восстановить старый контейнер при неудачном старте
+- WARP реализован как отдельный Xray-контейнер, не меняющий системные маршруты VPS
 
 ---
 
@@ -155,6 +168,17 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 <details>
 <summary>История версий</summary>
 
+#### v5.1 — Security hardening + Cloudflare WARP
+- Большой аудит безопасности bash-скрипта
+- Добавлен Cloudflare WARP proxy через Xray WireGuard outbound
+- Исправлен entrypoint: Reality и WARP функции объявляются до запуска меню
+- Исправлен `mtproxy --bot-daemon` для systemd Telegram-бота
+- Xray SOCKS5 больше не поднимает open proxy по умолчанию
+- Усилены права доступа к конфигам, экспортам, миграциям и WARP-профилям
+- Добавлены проверки портов, доменов и индексов меню
+- Self-update проверяет синтаксис скачанного файла
+- Rotate секрета стал безопаснее при ошибках генерации или старта контейнера
+
 #### v5.0 — VLESS+Reality + Security hardening
 - Добавлен VLESS + XTLS-Reality (Anti-DPI, не нужен домен)
 - `mktemp` для временных файлов — защита от symlink-атак
@@ -169,7 +193,7 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 - `domainStrategy: UseIP` для лучшего DNS
 
 #### v4.4 — Security audit
-- ShellCheck 0 warnings
+- Статические проверки bash-синтаксиса
 - Санитизация CLIENT_ID везде
 - Исправлен `xray_delete` — читает порты до удаления конфига
 - Проверка HTTP порта на конфликт с MTProxy
@@ -196,12 +220,13 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 
 ### What is this?
 
-> A single bash script that deploys three types of proxies on your VPS in **60 seconds** to bypass any censorship.
+> A single bash script that deploys multiple proxy modes on your VPS in **60 seconds** to bypass censorship.
 
 ```
 ✅ Telegram MTProxy  — built-in Telegram proxy, Fake TLS masking
 ✅ Xray SOCKS5+HTTP  — for WhatsApp, Instagram, browsers
 ✅ VLESS + Reality   — anti-DPI, mimics real HTTPS traffic
+✅ Cloudflare WARP   — separate SOCKS5/HTTP proxy routed through WARP
 ✅ Telegram Bot      — manage proxies directly from Telegram
 ✅ One script        — install, manage, monitor, auto-update
 ```
@@ -209,7 +234,7 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/mai
 ### ⚡ Quick Install
 
 ```bash
-wget -O mtproxy.sh https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh \
+wget -O mtproxy.sh https://raw.githubusercontent.com/ivan-yurich/mtproxy/main/mtproxy.sh \
   && chmod +x mtproxy.sh \
   && sudo ./mtproxy.sh
 ```
@@ -269,13 +294,14 @@ Host: your_server_ip   Port: 1081   Type: HTTP
 
 ### 🔒 Security Features
 
-- `mktemp` for temp files — symlink attack prevention
-- Input sanitization on all user-supplied data
-- `chmod 600` on all secret config files
-- Port validation (1-65535) and domain regex validation
-- Systemd unit for bot — isolated process, auto-restart
-- Log rotation via logrotate
-- ShellCheck — 0 warnings
+- Major security hardening pass across the bash script
+- `umask 077`, `chmod 600/700`, and helpers for secret configs, exports, migrations, and WARP profiles
+- Strict validation for ports, menu indexes, and domains before Docker/firewall operations
+- Xray SOCKS5 no longer creates a public open proxy by default
+- Telegram bot daemon mode is fixed for systemd and avoids duplicate polling processes
+- Self-update validates downloaded scripts with `bash -n` before replacing `/usr/local/bin/mtproxy`
+- Secret rotation is safer when generation or container startup fails
+- WARP runs in a separate Xray container without changing VPS system routes
 
 ---
 
@@ -293,7 +319,7 @@ Host: your_server_ip   Port: 1081   Type: HTTP
 
 ## 🤝 Contributing
 
-Found a bug or have an idea? Open an [Issue](https://github.com/ivanstudiya-cpu/mtproxy/issues)!
+Found a bug or have an idea? Open an [Issue](https://github.com/ivan-yurich/mtproxy/issues)!
 
 If this script helped you — please ⭐ the repo. It helps others find the project.
 
@@ -303,6 +329,6 @@ If this script helped you — please ⭐ the repo. It helps others find the proj
 
 **Сделано с ❤️ для русскоязычного сообщества · Made with ❤️ for the community**
 
-[⭐ Star](https://github.com/ivanstudiya-cpu/mtproxy) · [🐛 Bug Report](https://github.com/ivanstudiya-cpu/mtproxy/issues) · [💡 Feature Request](https://github.com/ivanstudiya-cpu/mtproxy/issues)
+[⭐ Star](https://github.com/ivan-yurich/mtproxy) · [🐛 Bug Report](https://github.com/ivan-yurich/mtproxy/issues) · [💡 Feature Request](https://github.com/ivan-yurich/mtproxy/issues)
 
 </div>

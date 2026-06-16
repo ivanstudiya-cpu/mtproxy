@@ -5,6 +5,9 @@
 #  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
 # ============================================================
 
+set -o pipefail
+umask 077
+
 BINARY_PATH="/usr/local/bin/mtproxy"
 XRAY_DIR="/etc/mtproxy/xray"
 BACKUP_DIR="/etc/mtproxy/backups"
@@ -15,6 +18,11 @@ EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
 VERSION="5.0"
+WARP_DIR="$CONFIG_DIR/warp"
+WARP_XRAY_DIR="$CONFIG_DIR/xray-warp"
+WARP_CONF="$CONFIG_DIR/warp.conf"
+WGCF_BIN="/usr/local/bin/wgcf"
+APT_UPDATED=0
 
 # --- ЦВЕТА ---
 R='\033[0;31m'
@@ -57,6 +65,40 @@ EOF
 
 pause() { read -rp $'\nНажмите Enter...' _; }
 
+is_valid_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 ))
+}
+
+is_valid_index() {
+    local idx="$1" max="$2"
+    [[ "$idx" =~ ^[0-9]+$ ]] && (( 10#$idx >= 1 && 10#$idx <= max ))
+}
+
+is_valid_domain() {
+    [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,}$ ]]
+}
+
+is_systemd_available() {
+    command -v systemctl &>/dev/null && [[ -d /run/systemd/system ]]
+}
+
+random_password() {
+    if command -v openssl &>/dev/null; then
+        openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 24
+        echo
+    else
+        date +%s%N | sha256sum | cut -c1-24
+    fi
+}
+
+secure_file() {
+    [[ -f "$1" ]] && chmod 600 "$1" 2>/dev/null || true
+}
+
+secure_dir() {
+    [[ -d "$1" ]] && chmod 700 "$1" 2>/dev/null || true
+}
+
 # ─── СИСТЕМНЫЕ ПРОВЕРКИ ──────────────────────────────────────
 
 check_root() {
@@ -76,26 +118,44 @@ check_os() {
 }
 
 pkg_install() {
+    if [[ $PKG_MANAGER == "apt" && $APT_UPDATED -eq 0 ]]; then
+        apt-get update -qq >/dev/null 2>&1 || die "apt-get update завершился ошибкой."
+        APT_UPDATED=1
+    fi
+
     case $PKG_MANAGER in
         apt) apt-get install -y "$@" -qq >/dev/null 2>&1 ;;
         yum) yum install -y "$@" >/dev/null 2>&1 ;;
         dnf) dnf install -y "$@" >/dev/null 2>&1 ;;
     esac
+    local rc=$?
+    [[ $rc -eq 0 ]] || die "Не удалось установить пакеты: $*"
 }
 
 install_deps() {
     info "Проверка зависимостей..."
 
+    if ! command -v curl &>/dev/null; then
+        info "Установка curl..."
+        pkg_install curl ca-certificates
+    fi
+
     if ! command -v docker &>/dev/null; then
         info "Установка Docker..."
-        curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
-        systemctl enable --now docker >/dev/null 2>&1
+        local docker_installer
+        docker_installer=$(mktemp /tmp/get-docker.XXXXXX)
+        curl -fsSL https://get.docker.com -o "$docker_installer" || die "Не удалось скачать установщик Docker."
+        sh "$docker_installer" >/dev/null 2>&1 || die "Установка Docker завершилась ошибкой."
+        rm -f "$docker_installer"
+        if command -v systemctl &>/dev/null; then
+            systemctl enable --now docker >/dev/null 2>&1 || warn "Docker установлен, но systemctl не смог включить сервис автоматически."
+        fi
+        command -v docker &>/dev/null || die "Docker не найден после установки."
         success "Docker установлен."
     fi
 
     if ! command -v qrencode &>/dev/null; then
         info "Установка qrencode..."
-        [[ $PKG_MANAGER == "apt" ]] && apt-get update -qq >/dev/null 2>&1
         pkg_install qrencode
     fi
 
@@ -103,13 +163,22 @@ install_deps() {
         pkg_install jq
     fi
 
-    if ! command -v curl &>/dev/null; then
-        pkg_install curl
+    if ! command -v python3 &>/dev/null; then
+        pkg_install python3
     fi
 
-    mkdir -p "$CONFIG_DIR" "$BACKUP_DIR" "$XRAY_DIR"
+    if ! command -v openssl &>/dev/null; then
+        pkg_install openssl
+    fi
+
+    mkdir -p "$CONFIG_DIR" "$BACKUP_DIR" "$XRAY_DIR" "$WARP_DIR" "$WARP_XRAY_DIR"
+    secure_dir "$CONFIG_DIR"
+    secure_dir "$BACKUP_DIR"
+    secure_dir "$XRAY_DIR"
+    secure_dir "$WARP_DIR"
+    secure_dir "$WARP_XRAY_DIR"
     touch "$CONFIG_FILE" "$LOG_FILE"
-    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    secure_file "$CONFIG_FILE"
 
     # Настраиваем logrotate если не настроен
     if [[ ! -f /etc/logrotate.d/mtproxy ]]; then
@@ -127,7 +196,7 @@ LREOF
 
     if [[ ! -f "$BINARY_PATH" || "$(realpath "$0")" != "$BINARY_PATH" ]]; then
         cp "$0" "$BINARY_PATH"
-        chmod +x "$BINARY_PATH"
+        chmod 755 "$BINARY_PATH"
         success "Команда 'mtproxy' доступна глобально."
     fi
 }
@@ -210,6 +279,11 @@ choose_domain() {
 
     if [[ "$choice" == "0" ]]; then
         read -rp "  Введите домен: " CHOSEN_DOMAIN
+        CHOSEN_DOMAIN="${CHOSEN_DOMAIN//[^a-zA-Z0-9._-]/}"
+        if ! is_valid_domain "$CHOSEN_DOMAIN"; then
+            warn "Некорректный домен, используется google.com"
+            CHOSEN_DOMAIN="google.com"
+        fi
     elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le "${#DOMAINS[@]}" ]]; then
         CHOSEN_DOMAIN="${DOMAINS[$((choice-1))]}"
     else
@@ -313,7 +387,7 @@ choose_port() {
         4) CHOSEN_PORT=1080 ;;
         5)
             read -rp "  Порт: " CHOSEN_PORT
-            [[ "$CHOSEN_PORT" =~ ^[0-9]+$ ]] || { warn "Некорректный порт, используется 443."; CHOSEN_PORT=443; }
+            is_valid_port "$CHOSEN_PORT" || { warn "Некорректный порт, используется 443."; CHOSEN_PORT=443; }
             ;;
         *)
             warn "Неверный выбор, используется 443."
@@ -447,17 +521,21 @@ menu_add() {
 
 _firewall_open() {
     local port="$1"
+    is_valid_port "$port" || { warn "Некорректный порт firewall: $port"; return 1; }
     if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
-        ufw allow "$port"/tcp >/dev/null 2>&1
+        ufw status 2>/dev/null | grep -qE "^${port}[/ ].*ALLOW" || ufw allow "$port"/tcp >/dev/null 2>&1
         success "UFW: порт $port открыт."
         log "UFW: открыт порт $port"
     elif command -v firewall-cmd &>/dev/null; then
-        firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1
-        firewall-cmd --reload >/dev/null 2>&1
+        firewall-cmd --list-ports 2>/dev/null | grep -q "${port}/tcp" || {
+            firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1
+            firewall-cmd --reload >/dev/null 2>&1
+        }
         success "firewalld: порт $port открыт."
         log "firewalld: открыт порт $port"
     elif command -v iptables &>/dev/null; then
-        iptables -I INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+        iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
         success "iptables: порт $port открыт."
         log "iptables: открыт порт $port"
     fi
@@ -465,6 +543,7 @@ _firewall_open() {
 
 _firewall_close() {
     local port="$1"
+    is_valid_port "$port" || { warn "Некорректный порт firewall: $port"; return 1; }
     if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
         ufw delete allow "$port"/tcp >/dev/null 2>&1
         log "UFW: закрыт порт $port"
@@ -498,6 +577,7 @@ firewall_menu() {
                 echo -e "  ${Y}$((i+1)))${NC} ${containers[$i]}"
             done
             read -rp "Номер: " IDX
+            is_valid_index "$IDX" "${#containers[@]}" || { warn "Неверный выбор."; pause; return; }
             local CONTAINER="${containers[$((IDX-1))]}"
             local PORT
             PORT=$(docker inspect "$CONTAINER" \
@@ -642,6 +722,10 @@ rotate_secret() {
     info "Генерация нового секрета..."
     local NEW_SECRET
     NEW_SECRET=$(docker run --rm nineseconds/mtg:2 generate-secret --hex "$DOMAIN" 2>/dev/null)
+    if [[ -z "$NEW_SECRET" ]]; then
+        warn "Не удалось сгенерировать новый секрет. Старый контейнер не тронут."
+        pause; return
+    fi
 
     docker stop "$CONTAINER" >/dev/null 2>&1
     docker rm "$CONTAINER" >/dev/null 2>&1
@@ -654,6 +738,25 @@ rotate_secret() {
         --log-opt max-file=3 \
         nineseconds/mtg:2 \
         simple-run -n 1.1.1.1 -i prefer-ipv4 0.0.0.0:"$PORT" "$NEW_SECRET" >/dev/null 2>&1
+
+    if ! docker ps --format "{{.Names}}" | grep -q "^$CONTAINER$"; then
+        warn "Новый контейнер не запустился. Бэкап записи: $BFILE"
+        local OLD_SECRET
+        OLD_SECRET=$(cut -d'|' -f4 "$BFILE" 2>/dev/null)
+        if [[ -n "$OLD_SECRET" ]]; then
+            warn "Пробую восстановить старый контейнер..."
+            docker rm "$CONTAINER" >/dev/null 2>&1 || true
+            docker run -d \
+                --name "$CONTAINER" \
+                --restart unless-stopped \
+                -p "$PORT:$PORT" \
+                --log-opt max-size=10m \
+                --log-opt max-file=3 \
+                nineseconds/mtg:2 \
+                simple-run -n 1.1.1.1 -i prefer-ipv4 0.0.0.0:"$PORT" "$OLD_SECRET" >/dev/null 2>&1
+        fi
+        pause; return
+    fi
 
     sed -i "/^$CONTAINER|/d" "$CONFIG_FILE"
     echo "$CONTAINER|$CLIENT_ID|$PORT|$NEW_SECRET|$DOMAIN|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG_FILE"
@@ -725,6 +828,7 @@ manage_proxy() {
     banner
     echo -e "${C}Управление (start/stop/restart):${NC}"
     mapfile -t containers < <(docker ps -a --format "{{.Names}}" | grep "^mtproto-")
+    [[ ${#containers[@]} -eq 0 ]] && { warn "Прокси не найдены."; pause; return; }
 
     for i in "${!containers[@]}"; do
         local s
@@ -736,6 +840,7 @@ manage_proxy() {
 
     echo ""
     read -rp "Номер контейнера: " IDX
+    is_valid_index "$IDX" "${#containers[@]}" || { warn "Неверный выбор."; pause; return; }
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
 
@@ -766,7 +871,8 @@ delete_proxy() {
 
     echo ""
     read -rp "Номер для удаления (0 — отмена): " IDX
-    [[ "$IDX" -eq 0 ]] && return
+    [[ "$IDX" == "0" ]] && return
+    is_valid_index "$IDX" "${#containers[@]}" || { warn "Неверный выбор."; pause; return; }
 
     local CONTAINER="${containers[$((IDX-1))]}"
     [[ -z "$CONTAINER" ]] && { warn "Неверный выбор."; pause; return; }
@@ -813,6 +919,7 @@ export_links() {
         echo "# IP: $IP"
         echo ""
     } > "$EXPORT_FILE"
+    secure_file "$EXPORT_FILE"
 
     for CONTAINER in "${containers[@]}"; do
         local PORT CMD SECRET DOMAIN STATUS
@@ -892,7 +999,7 @@ migrate_export() {
         } >> "$MIGRATION_FILE"
     done
 
-    chmod +x "$MIGRATION_FILE"
+    chmod 700 "$MIGRATION_FILE"
     success "Скрипт миграции: $MIGRATION_FILE"
     echo -e "\n${C}Скопируй файл на новый сервер:${NC}"
     echo -e "  scp $MIGRATION_FILE root@НОВЫЙ_IP:/root/"
@@ -928,7 +1035,7 @@ for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
     fi
 done
 HCEOF
-            chmod +x /etc/mtproxy/healthcheck.sh
+            chmod 700 /etc/mtproxy/healthcheck.sh
 
             # Добавляем в cron (убираем дубликаты)
             crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab -
@@ -1004,7 +1111,7 @@ for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] AUTO-ROTATE OK: $CONTAINER, новый секрет: $NEW_SECRET" >> "$LOG"
 done
 AREOF
-            chmod +x /etc/mtproxy/auto_rotate.sh
+            chmod 700 /etc/mtproxy/auto_rotate.sh
 
             # Убираем старый cron авто-rotate
             crontab -l 2>/dev/null | grep -v "auto_rotate" | crontab -
@@ -1051,6 +1158,8 @@ setup_tg_notify() {
             echo -e "${C}Свой chat_id узнай через @userinfobot.${NC}\n"
             read -rp "Bot Token: " BOT_TOKEN
             read -rp "Chat ID:   " CHAT_ID
+            BOT_TOKEN="${BOT_TOKEN//[^a-zA-Z0-9:_-]/}"
+            CHAT_ID="${CHAT_ID//[^0-9-]/}"
 
             echo "BOT_TOKEN=$BOT_TOKEN" > "$NOTIFY_CONF"
             echo "CHAT_ID=$CHAT_ID" >> "$NOTIFY_CONF"
@@ -1093,7 +1202,7 @@ for CONTAINER in $(docker ps -a --format "{{.Names}}" | grep "^mtproto-"); do
     fi
 done
 HCEOF
-            chmod +x /etc/mtproxy/healthcheck.sh
+            chmod 700 /etc/mtproxy/healthcheck.sh
 
             # Добавляем healthcheck в cron если ещё нет
             if ! crontab -l 2>/dev/null | grep -q "$CRON_TAG"; then
@@ -1152,6 +1261,11 @@ self_update() {
         rm -f "$TMP"; pause; return
     fi
 
+    if ! bash -n "$TMP" 2>/dev/null; then
+        warn "Загруженный файл не проходит bash -n. Обновление отменено."
+        rm -f "$TMP"; pause; return
+    fi
+
     echo -e "  Текущая версия: ${Y}$VERSION${NC}"
     echo -e "  Новая версия:   ${G}$NEW_VER${NC}\n"
 
@@ -1169,7 +1283,7 @@ self_update() {
     cp "$BINARY_PATH" "$BACKUP_DIR/mtproxy_v${VERSION}_$(date +%Y%m%d).bak" 2>/dev/null
 
     cp "$TMP" "$BINARY_PATH"
-    chmod +x "$BINARY_PATH"
+    chmod 755 "$BINARY_PATH"
     rm -f "$TMP"
 
     success "Обновлено до v$NEW_VER! Перезапусти скрипт: mtproxy"
@@ -1247,7 +1361,7 @@ xray_install() {
         2) XRAY_PORT=3129 ;;
         3) XRAY_PORT=8080 ;;
         4) read -rp "  Порт: " XRAY_PORT
-           [[ "$XRAY_PORT" =~ ^[0-9]+$ ]] || XRAY_PORT=1080 ;;
+           is_valid_port "$XRAY_PORT" || XRAY_PORT=1080 ;;
         *) XRAY_PORT=1080 ;;
     esac
     info "Выбран порт: $XRAY_PORT"
@@ -1278,18 +1392,34 @@ xray_install() {
 
     # Авторизация
     echo -e "\n${C}Защита паролем:${NC}"
-    echo "  1) Без пароля (открытый)"
-    echo "  2) С логином и паролем"
+    echo "  1) С логином и паролем (рекомендуется)"
+    echo "  2) Без пароля (опасно: публичный open proxy)"
     read -rp "  Выбор [1-2]: " xa
 
-    local XRAY_USER="" XRAY_PASS="" XRAY_AUTH_TYPE="noauth"
+    local XRAY_USER="" XRAY_PASS="" XRAY_AUTH_TYPE="password"
     if [[ "$xa" == "2" ]]; then
-        read -rp "  Логин: " XRAY_USER
-        read -rp "  Пароль: " XRAY_PASS
+        warn "Открытый SOCKS5/HTTP прокси будет доступен всем, кто найдёт порт."
+        read -rp "  Напиши OPEN чтобы подтвердить: " open_confirm
+        if [[ "$open_confirm" == "OPEN" ]]; then
+            XRAY_AUTH_TYPE="noauth"
+            info "Открытый доступ (без пароля)"
+        else
+            warn "Подтверждение не введено, включаю пароль."
+            xa="1"
+        fi
+    fi
+
+    if [[ "$XRAY_AUTH_TYPE" == "password" ]]; then
+        read -rp "  Логин [proxy]: " XRAY_USER
+        XRAY_USER="${XRAY_USER:-proxy}"
+        XRAY_USER="${XRAY_USER//[^a-zA-Z0-9_.-]/}"
+        XRAY_USER="${XRAY_USER:-proxy}"
+        read -rsp "  Пароль (Enter = сгенерировать): " XRAY_PASS
+        echo ""
+        XRAY_PASS="${XRAY_PASS//[^a-zA-Z0-9_.-]/}"
+        [[ -z "$XRAY_PASS" ]] && XRAY_PASS="$(random_password)"
         XRAY_AUTH_TYPE="password"
         info "Авторизация включена: $XRAY_USER"
-    else
-        info "Открытый доступ (без пароля)"
     fi
 
     # Генерируем конфиг раздельно чтобы не было проблем с кавычками в JSON
@@ -1367,6 +1497,7 @@ XCONF
 }
 XCONF
     fi
+    secure_file "$XRAY_DIR/config.json"
 
     # Проверяем JSON
     if command -v python3 &>/dev/null; then
@@ -1443,6 +1574,7 @@ XCONF
     IP=$(get_public_ip)
 
     echo "$XRAY_PORT|$XRAY_HTTP_PORT|$XRAY_USER|$XRAY_PASS|$(date '+%Y-%m-%d %H:%M:%S')" > "$CONFIG_DIR/xray.conf"
+    secure_file "$CONFIG_DIR/xray.conf"
     log "Xray установлен: порт=$XRAY_PORT"
 
     clear
@@ -1453,7 +1585,7 @@ XCONF
     echo -e "  ${C}IP:${NC}       $IP"
     echo -e "  ${C}Порт:${NC}     $XRAY_PORT"
     echo -e "  ${C}Протокол:${NC} SOCKS5"
-    if [[ "$xa" == "2" ]]; then
+    if [[ "$XRAY_AUTH_TYPE" == "password" ]]; then
         echo -e "  ${C}Логин:${NC}    $XRAY_USER"
         echo -e "  ${C}Пароль:${NC}   $XRAY_PASS"
     else
@@ -1467,7 +1599,7 @@ XCONF
     echo -e "  • WhatsApp/Telegram: Настройки → Прокси → SOCKS5"
     echo -e "
   ${Y}QR для мобильных приложений:${NC}"
-    if [[ "$xa" == "2" ]]; then
+    if [[ "$XRAY_AUTH_TYPE" == "password" ]]; then
         qrencode -t ANSIUTF8 "socks5://$XRAY_USER:$XRAY_PASS@$IP:$XRAY_PORT"
     else
         qrencode -t ANSIUTF8 "socks5://$IP:$XRAY_PORT"
@@ -1633,6 +1765,462 @@ xray_menu() {
             2) xray_status ;;
             3) xray_manage ;;
             4) xray_delete ;;
+            0) return ;;
+            *) warn "Неверный ввод." ;;
+        esac
+    done
+}
+
+
+# ═══════════════════════════════════════════════════════════
+# ─── CLOUDFLARE WARP ЧЕРЕЗ XRAY WIREGUARD OUTBOUND ────────
+# ═══════════════════════════════════════════════════════════
+
+_install_wgcf() {
+    if command -v wgcf &>/dev/null; then
+        command -v wgcf
+        return
+    fi
+
+    local arch suffix release_json url tmp
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) suffix="linux_amd64" ;;
+        aarch64|arm64) suffix="linux_arm64" ;;
+        armv7l) suffix="linux_armv7" ;;
+        armv6l) suffix="linux_armv6" ;;
+        armv5l) suffix="linux_armv5" ;;
+        i386|i686) suffix="linux_386" ;;
+        *) die "Архитектура не поддерживается для wgcf: $arch" ;;
+    esac
+
+    info "Скачиваю wgcf для $suffix..." >&2
+    release_json=$(curl -fsSL "https://api.github.com/repos/ViRb3/wgcf/releases/latest") || die "Не удалось получить release wgcf."
+    url=$(echo "$release_json" | jq -r --arg suffix "$suffix" '.assets[] | select(.name | endswith($suffix)) | .browser_download_url' | head -n1)
+    [[ -n "$url" && "$url" != "null" ]] || die "Не найден бинарник wgcf для $suffix."
+
+    tmp=$(mktemp /tmp/wgcf.XXXXXX)
+    curl -fsSL "$url" -o "$tmp" || die "Не удалось скачать wgcf."
+    install -m 755 "$tmp" "$WGCF_BIN" || die "Не удалось установить wgcf в $WGCF_BIN."
+    rm -f "$tmp"
+    echo "$WGCF_BIN"
+}
+
+_warp_generate_profile() {
+    local license_key="$1"
+    local wgcf
+    wgcf=$(_install_wgcf)
+
+    mkdir -p "$WARP_DIR"
+    secure_dir "$WARP_DIR"
+
+    (
+        cd "$WARP_DIR" || exit 1
+        if [[ ! -f wgcf-account.toml ]]; then
+            info "Регистрирую новый WARP аккаунт..."
+            "$wgcf" register --accept-tos >/dev/null 2>&1 || die "wgcf register завершился ошибкой."
+        fi
+        if [[ -n "$license_key" ]]; then
+            info "Привязываю WARP+ license key..."
+            "$wgcf" update --license-key "$license_key" >/dev/null 2>&1 || die "wgcf update завершился ошибкой."
+        fi
+        "$wgcf" generate >/dev/null 2>&1 || die "wgcf generate завершился ошибкой."
+    )
+
+    [[ -s "$WARP_DIR/wgcf-profile.conf" ]] || die "wgcf-profile.conf не создан."
+    secure_file "$WARP_DIR/wgcf-account.toml"
+    secure_file "$WARP_DIR/wgcf-profile.conf"
+}
+
+_warp_profile_value() {
+    local key="$1" file="$2"
+    awk -v key="$key" '
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            line=$0;
+            sub(/^[^=]*=/, "", line);
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line);
+            print line;
+            exit
+        }
+    ' "$file"
+}
+
+_warp_profile_values_json() {
+    local key="$1" file="$2"
+    awk -v key="$key" '
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            line=$0;
+            sub(/^[^=]*=/, "", line);
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line);
+            gsub(/,/, "\n", line);
+            print line;
+        }
+    ' "$file" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | jq -R . | jq -s .
+}
+
+_warp_reserved_json() {
+    local raw="$1"
+    if [[ -z "$raw" ]]; then
+        echo '[0,0,0]'
+        return
+    fi
+    echo "$raw" | tr -d '[][:space:]' | jq -R 'split(",") | map(select(length > 0) | tonumber)'
+}
+
+_warp_write_xray_config() {
+    local socks_port="$1" http_port="$2" listen="$3" user="$4" pass="$5"
+    local profile="$WARP_DIR/wgcf-profile.conf"
+    local private_key public_key endpoint mtu reserved_raw
+    local address_json reserved_json
+
+    private_key=$(_warp_profile_value "PrivateKey" "$profile")
+    public_key=$(_warp_profile_value "PublicKey" "$profile")
+    endpoint=$(_warp_profile_value "Endpoint" "$profile")
+    mtu=$(_warp_profile_value "MTU" "$profile")
+    reserved_raw=$(_warp_profile_value "Reserved" "$profile")
+    address_json=$(_warp_profile_values_json "Address" "$profile")
+    reserved_json=$(_warp_reserved_json "$reserved_raw")
+    mtu="${mtu:-1280}"
+
+    [[ -n "$private_key" && -n "$public_key" && -n "$endpoint" ]] || die "WARP профиль неполный: нет PrivateKey/PublicKey/Endpoint."
+    [[ -n "$address_json" && "$address_json" != "[]" ]] || die "WARP профиль неполный: нет Address."
+    [[ "$mtu" =~ ^[0-9]+$ ]] || mtu=1280
+
+    mkdir -p "$WARP_XRAY_DIR"
+    secure_dir "$WARP_XRAY_DIR"
+
+    jq -n \
+        --argjson socks_port "$socks_port" \
+        --argjson http_port "$http_port" \
+        --arg listen "$listen" \
+        --arg user "$user" \
+        --arg pass "$pass" \
+        --arg private_key "$private_key" \
+        --arg public_key "$public_key" \
+        --arg endpoint "$endpoint" \
+        --argjson addresses "$address_json" \
+        --argjson reserved "$reserved_json" \
+        --argjson mtu "$mtu" \
+        '{
+          log: {loglevel: "warning"},
+          dns: {servers: ["1.1.1.1", "1.0.0.1", "8.8.8.8"]},
+          inbounds: [
+            {
+              port: $socks_port,
+              listen: $listen,
+              protocol: "socks",
+              tag: "socks-in",
+              settings: {
+                auth: "password",
+                accounts: [{user: $user, pass: $pass}],
+                udp: true,
+                ip: $listen
+              }
+            },
+            {
+              port: $http_port,
+              listen: $listen,
+              protocol: "http",
+              tag: "http-in",
+              settings: {
+                accounts: [{user: $user, pass: $pass}],
+                allowTransparent: true
+              }
+            }
+          ],
+          outbounds: [
+            {
+              tag: "wireguard",
+              protocol: "wireguard",
+              settings: {
+                secretKey: $private_key,
+                address: $addresses,
+                peers: [
+                  {
+                    publicKey: $public_key,
+                    endpoint: $endpoint,
+                    allowedIPs: ["0.0.0.0/0", "::/0"],
+                    keepAlive: 25
+                  }
+                ],
+                reserved: $reserved,
+                mtu: $mtu,
+                noKernelTun: true,
+                domainStrategy: "ForceIPv4"
+              }
+            }
+          ],
+          routing: {
+            domainStrategy: "IPIfNonMatch",
+            rules: [
+              {type: "field", inboundTag: ["socks-in", "http-in"], outboundTag: "wireguard"}
+            ]
+          }
+        }' > "$WARP_XRAY_DIR/config.json" || die "Не удалось создать WARP Xray config."
+
+    secure_file "$WARP_XRAY_DIR/config.json"
+}
+
+_warp_pull_xray_image() {
+    local image=""
+    if docker pull ghcr.io/xtls/xray-core:latest >/dev/null 2>&1; then
+        image="ghcr.io/xtls/xray-core:latest"
+    elif docker pull teddysun/xray >/dev/null 2>&1; then
+        image="teddysun/xray"
+    else
+        die "Не удалось загрузить образ Xray для WARP."
+    fi
+    echo "$image"
+}
+
+_warp_proxy_url() {
+    local scheme="$1" host="$2" port="$3" user="$4" pass="$5"
+    echo "${scheme}://${user}:${pass}@${host}:${port}"
+}
+
+_warp_test_trace() {
+    [[ -f "$WARP_CONF" ]] || return 1
+    local port user pass
+    port=$(cut -d'|' -f1 "$WARP_CONF")
+    user=$(cut -d'|' -f3 "$WARP_CONF")
+    pass=$(cut -d'|' -f4 "$WARP_CONF")
+    curl -s --max-time 12 -x "$(_warp_proxy_url "socks5h" "127.0.0.1" "$port" "$user" "$pass")" \
+        "https://www.cloudflare.com/cdn-cgi/trace/" 2>/dev/null
+}
+
+warp_install() {
+    banner
+    echo -e "${G}═══ УСТАНОВКА WARP PROXY ═══${NC}\n"
+    echo "Создаёт отдельный Xray SOCKS5/HTTP прокси, у которого outbound идёт через Cloudflare WARP."
+    echo "Маршруты сервера и SSH не меняются."
+    echo ""
+
+    if docker ps -a --format "{{.Names}}" | grep -q "^xray-warp$"; then
+        warn "WARP proxy уже установлен."
+        pause; return
+    fi
+
+    local WARP_PORT WARP_HTTP_PORT mode listen bind_prefix user pass license_key
+    read -rp "  SOCKS5 порт [40000]: " WARP_PORT
+    WARP_PORT="${WARP_PORT:-40000}"
+    is_valid_port "$WARP_PORT" || { warn "Некорректный порт."; pause; return; }
+    WARP_HTTP_PORT=$((WARP_PORT + 1))
+    is_valid_port "$WARP_HTTP_PORT" || { warn "HTTP порт выходит за диапазон."; pause; return; }
+
+    for check_port in "$WARP_PORT" "$WARP_HTTP_PORT"; do
+        if ss -tlnp 2>/dev/null | grep -q ":${check_port} "; then
+            warn "Порт $check_port уже занят."
+            pause; return
+        fi
+    done
+
+    echo -e "\n${C}Доступ:${NC}"
+    echo "  1) Публичный 0.0.0.0 с логином/паролем"
+    echo "  2) Только localhost 127.0.0.1"
+    read -rp "  Выбор [1-2]: " mode
+    if [[ "$mode" == "2" ]]; then
+        listen="127.0.0.1"
+        bind_prefix="127.0.0.1:"
+    else
+        listen="0.0.0.0"
+        bind_prefix=""
+    fi
+
+    read -rp "  Логин [warp]: " user
+    user="${user:-warp}"
+    user="${user//[^a-zA-Z0-9_.-]/}"
+    user="${user:-warp}"
+    read -rsp "  Пароль (Enter = сгенерировать): " pass
+    echo ""
+    pass="${pass//[^a-zA-Z0-9_.-]/}"
+    [[ -z "$pass" ]] && pass="$(random_password)"
+
+    echo ""
+    read -rp "  WARP+ license key (Enter = бесплатный WARP): " license_key
+    license_key="${license_key//[^a-zA-Z0-9_-]/}"
+
+    _warp_generate_profile "$license_key"
+    _warp_write_xray_config "$WARP_PORT" "$WARP_HTTP_PORT" "$listen" "$user" "$pass"
+
+    local image
+    image=$(_warp_pull_xray_image)
+
+    info "Запуск xray-warp..."
+    if [[ "$image" == *"xtls"* ]]; then
+        docker run -d \
+            --name xray-warp \
+            --restart unless-stopped \
+            -p "${bind_prefix}${WARP_PORT}:${WARP_PORT}" \
+            -p "${bind_prefix}${WARP_HTTP_PORT}:${WARP_HTTP_PORT}" \
+            -v "$WARP_XRAY_DIR:/etc/xray" \
+            --log-opt max-size=10m \
+            --log-opt max-file=3 \
+            "$image" \
+            run -config /etc/xray/config.json >/dev/null 2>&1
+    else
+        docker run -d \
+            --name xray-warp \
+            --restart unless-stopped \
+            -p "${bind_prefix}${WARP_PORT}:${WARP_PORT}" \
+            -p "${bind_prefix}${WARP_HTTP_PORT}:${WARP_HTTP_PORT}" \
+            -v "$WARP_XRAY_DIR:/etc/xray" \
+            --log-opt max-size=10m \
+            --log-opt max-file=3 \
+            "$image" \
+            xray -config /etc/xray/config.json >/dev/null 2>&1
+    fi
+
+    sleep 3
+    if ! docker ps --format "{{.Names}}" | grep -q "^xray-warp$"; then
+        echo -e "${R}Логи:${NC}"
+        docker logs xray-warp 2>&1 | tail -30
+        docker rm xray-warp >/dev/null 2>&1
+        die "WARP proxy не запустился."
+    fi
+
+    if [[ "$listen" == "0.0.0.0" ]]; then
+        _firewall_open "$WARP_PORT"
+        _firewall_open "$WARP_HTTP_PORT"
+    fi
+
+    echo "$WARP_PORT|$WARP_HTTP_PORT|$user|$pass|$listen|$(date '+%Y-%m-%d %H:%M:%S')" > "$WARP_CONF"
+    secure_file "$WARP_CONF"
+    log "WARP proxy установлен: socks=$WARP_PORT http=$WARP_HTTP_PORT listen=$listen"
+
+    local IP display_host trace warp_line
+    IP=$(get_public_ip)
+    display_host="$IP"
+    [[ "$listen" == "127.0.0.1" ]] && display_host="127.0.0.1"
+    trace=$(_warp_test_trace)
+    warp_line=$(echo "$trace" | grep '^warp=' || true)
+
+    clear
+    echo -e "${G}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${G}║          WARP proxy установлен!             ║${NC}"
+    echo -e "${G}╚══════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${C}Listen:${NC}   $listen"
+    echo -e "  ${C}SOCKS5:${NC}   ${display_host}:${WARP_PORT}"
+    echo -e "  ${C}HTTP:${NC}     ${display_host}:${WARP_HTTP_PORT}"
+    echo -e "  ${C}Логин:${NC}    $user"
+    echo -e "  ${C}Пароль:${NC}   $pass"
+    [[ -n "$warp_line" ]] && echo -e "  ${C}Trace:${NC}    $warp_line" || warn "Не удалось проверить WARP trace через прокси."
+    echo -e "\n  ${Y}QR SOCKS5:${NC}"
+    qrencode -t ANSIUTF8 "$(_warp_proxy_url "socks5" "$display_host" "$WARP_PORT" "$user" "$pass")"
+    pause
+}
+
+warp_status() {
+    banner
+    echo -e "${C}═══ СТАТУС WARP PROXY ═══${NC}\n"
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-warp$"; then
+        warn "WARP proxy не установлен."
+        pause; return
+    fi
+
+    local status color ip display_host port http_port user listen trace
+    status=$(docker inspect --format='{{.State.Status}}' xray-warp 2>/dev/null)
+    color="${R}"; [[ "$status" == "running" ]] && color="${G}"
+    ip=$(get_public_ip)
+
+    if [[ -f "$WARP_CONF" ]]; then
+        port=$(cut -d'|' -f1 "$WARP_CONF")
+        http_port=$(cut -d'|' -f2 "$WARP_CONF")
+        user=$(cut -d'|' -f3 "$WARP_CONF")
+        listen=$(cut -d'|' -f5 "$WARP_CONF")
+    fi
+    display_host="$ip"
+    [[ "$listen" == "127.0.0.1" ]] && display_host="127.0.0.1"
+
+    echo -e "  ${W}Статус:${NC}  [${color}${status}${NC}]"
+    echo -e "  ${W}Listen:${NC}  ${listen:-unknown}"
+    echo -e "  ${W}SOCKS5:${NC}  ${display_host}:${port:-unknown}"
+    echo -e "  ${W}HTTP:${NC}    ${display_host}:${http_port:-unknown}"
+    echo -e "  ${W}Логин:${NC}   ${user:-unknown}"
+    echo ""
+
+    trace=$(_warp_test_trace)
+    if [[ -n "$trace" ]]; then
+        echo -e "${C}Cloudflare trace:${NC}"
+        echo "$trace" | grep -E '^(ip|colo|warp|gateway)=' || echo "$trace" | head -10
+    else
+        warn "Trace не получен."
+    fi
+
+    echo -e "\n${C}Трафик:${NC}"
+    docker stats --no-stream --format "  CPU: {{.CPUPerc}}  RAM: {{.MemUsage}}  NET: {{.NetIO}}" xray-warp 2>/dev/null
+    echo -e "\n${C}Логи (20 строк):${NC}"
+    docker logs --tail=20 xray-warp 2>&1
+    pause
+}
+
+warp_manage() {
+    banner
+    echo -e "${C}═══ УПРАВЛЕНИЕ WARP PROXY ═══${NC}\n"
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-warp$"; then
+        warn "WARP proxy не установлен."; pause; return
+    fi
+    local status
+    status=$(docker inspect --format='{{.State.Status}}' xray-warp)
+    echo -e "  xray-warp: ${Y}$status${NC}\n"
+    echo "  1) Start   2) Stop   3) Restart"
+    read -rp "  Действие: " act
+    case $act in
+        1) docker start xray-warp >/dev/null && success "Запущен" ;;
+        2) docker stop xray-warp >/dev/null && success "Остановлен" ;;
+        3) docker restart xray-warp >/dev/null && success "Перезапущен" ;;
+        *) warn "Неверный выбор" ;;
+    esac
+    pause
+}
+
+warp_delete() {
+    banner
+    echo -e "${R}═══ УДАЛЕНИЕ WARP PROXY ═══${NC}\n"
+    if ! docker ps -a --format "{{.Names}}" | grep -q "^xray-warp$"; then
+        warn "WARP proxy не установлен."; pause; return
+    fi
+    read -rp "  Удалить WARP proxy? [y/N] " confirm
+    [[ "${confirm,,}" != "y" ]] && return
+
+    local port http_port listen
+    if [[ -f "$WARP_CONF" ]]; then
+        port=$(cut -d'|' -f1 "$WARP_CONF")
+        http_port=$(cut -d'|' -f2 "$WARP_CONF")
+        listen=$(cut -d'|' -f5 "$WARP_CONF")
+    fi
+
+    docker stop xray-warp >/dev/null 2>&1
+    docker rm xray-warp >/dev/null 2>&1
+    rm -f "$WARP_CONF"
+
+    if [[ "$listen" == "0.0.0.0" && -n "$port" && -n "$http_port" ]]; then
+        read -rp "  Закрыть порты $port и $http_port в firewall? [y/N] " fw
+        if [[ "${fw,,}" == "y" ]]; then
+            _firewall_close "$port"
+            _firewall_close "$http_port"
+        fi
+    fi
+
+    success "WARP proxy удалён. WARP аккаунт сохранён в $WARP_DIR"
+    log "WARP proxy удалён"
+    pause
+}
+
+warp_menu() {
+    while true; do
+        banner
+        echo -e "${W}  ── Cloudflare WARP через Xray ──${NC}\n"
+        echo -e "  ${G}1)${NC} Установить WARP proxy"
+        echo -e "  ${C}2)${NC} Статус и trace"
+        echo -e "  ${Y}3)${NC} Start / Stop / Restart"
+        echo -e "  ${R}4)${NC} Удалить WARP proxy"
+        echo -e "  ${DIM}0)${NC} Назад\n"
+        read -rp "  Пункт: " choice
+        case $choice in
+            1) warp_install ;;
+            2) warp_status ;;
+            3) warp_manage ;;
+            4) warp_delete ;;
             0) return ;;
             *) warn "Неверный ввод." ;;
         esac
@@ -2031,6 +2619,8 @@ setup_tg_bot() {
             echo -e "${C}2. Свой chat_id узнай через @userinfobot.${NC}\n"
             read -rp "  Bot Token: " BOT_TOKEN
             read -rp "  Твой Chat ID: " BOT_ADMIN_ID
+            BOT_TOKEN="${BOT_TOKEN//[^a-zA-Z0-9:_-]/}"
+            BOT_ADMIN_ID="${BOT_ADMIN_ID//[^0-9-]/}"
 
             if [[ -z "$BOT_TOKEN" || -z "$BOT_ADMIN_ID" ]]; then
                 warn "Токен и Chat ID обязательны!"; pause; return
@@ -2043,7 +2633,7 @@ setup_tg_bot() {
             fi
 
             local bot_name
-            bot_name=$(echo "$check" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['username'])" 2>/dev/null)
+            bot_name=$(echo "$check" | jq -r '.result.username // "unknown"' 2>/dev/null)
             success "Бот найден: @$bot_name"
 
             cat > "$BOT_CONF" << BOTEOF
@@ -2051,7 +2641,7 @@ BOT_TOKEN=$BOT_TOKEN
 BOT_ADMIN_ID=$BOT_ADMIN_ID
 BOT_NAME=$bot_name
 BOTEOF
-            chmod 600 "$BOT_CONF"
+            secure_file "$BOT_CONF"
 
             # Останавливаем старый
             if [[ -f "$BOT_PID_FILE" ]]; then
@@ -2077,29 +2667,36 @@ User=root
 WantedBy=multi-user.target
 SVCEOF
 
-            # Запускаем в фоне (PID файл для управления)
-            # Останавливаем старый если есть
             if [[ -f "$BOT_PID_FILE" ]]; then
                 kill "$(cat "$BOT_PID_FILE")" 2>/dev/null || true
                 rm -f "$BOT_PID_FILE"
             fi
-            _bot_loop "$BOT_TOKEN" "$BOT_ADMIN_ID" &
-            echo $! > "$BOT_PID_FILE"
 
-            # Активируем systemd если доступен
-            if command -v systemctl &>/dev/null; then
+            if is_systemd_available; then
                 systemctl daemon-reload 2>/dev/null || true
                 systemctl enable mtproxy-bot.service 2>/dev/null || true
+                systemctl restart mtproxy-bot.service 2>/dev/null || true
+                if systemctl is-active --quiet mtproxy-bot.service; then
+                    success "Бот @$bot_name запущен через systemd."
+                else
+                    warn "Systemd unit создан, но сервис не стартовал. Смотри: journalctl -u mtproxy-bot -n 50"
+                fi
+            else
+                _bot_loop "$BOT_TOKEN" "$BOT_ADMIN_ID" &
+                echo $! > "$BOT_PID_FILE"
+                success "Бот @$bot_name запущен (PID: $(cat "$BOT_PID_FILE"))!"
             fi
 
-            success "Бот @$bot_name запущен (PID: $(cat "$BOT_PID_FILE"))!"
-            success "Systemd unit создан — бот поднимется после ребута."
             echo -e "\n${C}Напиши /help боту в Telegram.${NC}"
-            log "TG бот запущен: @$bot_name PID=$(cat "$BOT_PID_FILE")"
+            log "TG бот запущен: @$bot_name"
             ;;
         2)
             echo ""
-            if [[ -f "$BOT_PID_FILE" ]] && kill -0 "$(cat "$BOT_PID_FILE")" 2>/dev/null; then
+            if is_systemd_available && systemctl is-active --quiet mtproxy-bot.service; then
+                # shellcheck disable=SC1090
+                source "$BOT_CONF" 2>/dev/null || true
+                success "Бот работает через systemd | @${BOT_NAME:-unknown}"
+            elif [[ -f "$BOT_PID_FILE" ]] && kill -0 "$(cat "$BOT_PID_FILE")" 2>/dev/null; then
                 # shellcheck disable=SC1090
                 source "$BOT_CONF" 2>/dev/null
                 success "Бот работает | PID: $(cat "$BOT_PID_FILE") | @${BOT_NAME:-unknown}"
@@ -2108,14 +2705,15 @@ SVCEOF
             fi
             ;;
         3)
+            if is_systemd_available; then
+                systemctl disable --now mtproxy-bot.service 2>/dev/null || true
+            fi
             if [[ -f "$BOT_PID_FILE" ]]; then
                 kill "$(cat "$BOT_PID_FILE")" 2>/dev/null
                 rm -f "$BOT_PID_FILE"
-                success "Бот остановлен."
-                log "TG бот остановлен"
-            else
-                warn "Бот не запущен."
             fi
+            success "Бот остановлен."
+            log "TG бот остановлен"
             ;;
         4)
             echo ""
@@ -2146,6 +2744,7 @@ main_menu() {
         echo ""
         echo -e "  ${W}── Xray SOCKS5 (WhatsApp / универсальный) ──${NC}"
         echo -e "  ${M}10)${NC} Меню Xray SOCKS5"
+        echo -e "  ${M}21)${NC} Меню Cloudflare WARP"
         echo ""
         echo -e "  ${W}── Установить всё сразу ──${NC}"
         echo -e "  ${G}11)${NC} Установить Telegram + Xray"
@@ -2186,18 +2785,12 @@ main_menu() {
             18) delete_proxy ;;
             19) full_uninstall ;;
             20) setup_tg_bot ;;
+            21) warp_menu ;;
             0)  echo -e "${DIM}Выход.${NC}"; exit 0 ;;
             *)  warn "Неверный ввод." ;;
         esac
     done
 }
-
-# ─── ТОЧКА ВХОДА ────────────────────────────────────────────
-
-check_root
-check_os
-install_deps
-main_menu
 
 # ═══════════════════════════════════════════════════════════
 # ─── VLESS + XTLS-REALITY ──────────────────────────────────
@@ -2227,7 +2820,7 @@ xray_reality_install() {
     case $rp in
         2) REALITY_PORT=8443 ;;
         3) read -rp "  Порт: " REALITY_PORT
-           [[ "$REALITY_PORT" =~ ^[0-9]+$ ]] || REALITY_PORT=443 ;;
+           is_valid_port "$REALITY_PORT" || REALITY_PORT=443 ;;
         *) REALITY_PORT=443 ;;
     esac
 
@@ -2252,6 +2845,7 @@ xray_reality_install() {
         4) SERVER_NAME="www.cloudflare.com"; DEST="www.cloudflare.com:443" ;;
         5) read -rp "  Домен: " SERVER_NAME
            SERVER_NAME="${SERVER_NAME//[^a-zA-Z0-9._-]/}"
+           is_valid_domain "$SERVER_NAME" || SERVER_NAME="www.microsoft.com"
            DEST="${SERVER_NAME}:443" ;;
         *) SERVER_NAME="www.microsoft.com";  DEST="www.microsoft.com:443" ;;
     esac
@@ -2324,6 +2918,7 @@ xray_reality_install() {
   ]
 }
 XCONF
+    secure_file "$REALITY_DIR/config.json"
 
     # Проверяем JSON
     if command -v python3 &>/dev/null; then
@@ -2502,3 +3097,39 @@ xray_reality_menu() {
         esac
     done
 }
+
+run_bot_daemon() {
+    [[ -f "$BOT_CONF" ]] || die "Конфиг бота не найден: $BOT_CONF"
+    # shellcheck disable=SC1090
+    source "$BOT_CONF"
+    [[ -n "${BOT_TOKEN:-}" && -n "${BOT_ADMIN_ID:-}" ]] || die "BOT_TOKEN/BOT_ADMIN_ID не заданы в $BOT_CONF"
+    echo $$ > "$BOT_PID_FILE"
+    secure_file "$BOT_PID_FILE"
+    trap 'rm -f "$BOT_PID_FILE"' EXIT
+    _bot_loop "$BOT_TOKEN" "$BOT_ADMIN_ID"
+}
+
+main() {
+    check_root
+    check_os
+    install_deps
+
+    case "${1:-}" in
+        --bot-daemon)
+            run_bot_daemon
+            ;;
+        -h|--help)
+            echo "Usage: mtproxy [--bot-daemon]"
+            ;;
+        "")
+            main_menu
+            ;;
+        *)
+            warn "Неизвестный аргумент: $1"
+            echo "Usage: mtproxy [--bot-daemon]"
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"
