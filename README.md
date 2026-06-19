@@ -5,7 +5,7 @@
 ### Telegram MTProxy · Xray SOCKS5 · VLESS+Reality · Cloudflare WARP
 ### Всё в одном bash-скрипте. Работает за 1 минуту.
 
-[![Version](https://img.shields.io/badge/version-5.1-blue?style=for-the-badge)](https://github.com/ivan-yurich/mtproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.2-blue?style=for-the-badge)](https://github.com/ivan-yurich/mtproxy/releases)
 [![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-required-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![Stars](https://img.shields.io/github/stars/ivan-yurich/mtproxy?style=for-the-badge&color=yellow)](https://github.com/ivan-yurich/mtproxy/stargazers)
@@ -124,13 +124,21 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivan-yurich/mtproxy/main/mt
 - `umask 077`, `chmod 600/700` и отдельные helper-функции для файлов с токенами, секретами, WARP-профилями и migration/export файлами
 - строгая валидация портов, индексов меню и доменов перед Docker/firewall операциями
 - централизованный ввод пользователя с лимитами длины для пунктов меню, токенов, ID, паролей и WARP-ключей
-- Xray SOCKS5 больше не создаёт публичный open proxy по умолчанию: пароль включён сразу, открытый режим требует явного подтверждения `OPEN`
+- Xray SOCKS5/HTTP больше не создаёт публичный open proxy: логин и пароль обязательны
 - JSON-конфиги с логинами и паролями больше не выводятся в терминал при ошибке проверки
 - firewall helper не добавляет дублирующиеся iptables-правила и отказывается работать с некорректными портами
 - `--bot-daemon` и systemd-режим Telegram-бота исправлены, чтобы бот не запускался вторым polling-процессом
 - self-update проверяет скачанный скрипт через `bash -n` перед заменой `/usr/local/bin/mtproxy`
 - rotate секрета не удаляет рабочий контейнер, если новый секрет не сгенерировался, и пробует восстановить старый контейнер при неудачном старте
 - WARP реализован как отдельный Xray-контейнер, не меняющий системные маршруты VPS
+
+#### Telegram-бот продаж
+- Python-бот больше не создаёт Xray SOCKS5/HTTP без авторизации: каждому инстансу выдаётся логин и пароль
+- SSH-доступ через Paramiko переведён на строгую проверку host key (`known_hosts`) вместо автоматического доверия любому серверу
+- Удалённые shell-команды валидируют имена контейнеров/клиентов, порты и домены, а динамические значения экранируются через `shlex.quote`
+- MTProxy Fake TLS secret теперь генерируется через `mtg generate-secret --hex`, а не собирается вручную
+- Конфиги на VPS записываются через безопасную base64-передачу без heredoc-инъекций
+- Telegram HTML-ответы экранируют ссылки, QR-текст и пользовательские значения
 
 ---
 
@@ -170,12 +178,18 @@ wget -O mtproxy.sh https://raw.githubusercontent.com/ivan-yurich/mtproxy/main/mt
 <details>
 <summary>История версий</summary>
 
+#### v5.2 — Bot security hardening
+- Усилен Python-бот продаж: строгий SSH host key checking, Xray auth by default, safe remote command quoting, безопасная генерация MTProxy secret
+- Xray SOCKS5/HTTP в bash-скрипте больше не поддерживает режим без пароля
+- Self-update URL переведён на актуальный репозиторий `ivan-yurich/mtproxy`
+- Telegram HTML-ответы бота экранируют ссылки, QR-текст и пользовательские значения
+
 #### v5.1 — Security hardening + Cloudflare WARP
 - Большой аудит безопасности bash-скрипта
 - Добавлен Cloudflare WARP proxy через Xray WireGuard outbound
 - Исправлен entrypoint: Reality и WARP функции объявляются до запуска меню
 - Исправлен `mtproxy --bot-daemon` для systemd Telegram-бота
-- Xray SOCKS5 больше не поднимает open proxy по умолчанию
+- Xray SOCKS5/HTTP больше не поднимает open proxy: авторизация обязательна
 - Усилены права доступа к конфигам, экспортам, миграциям и WARP-профилям
 - Добавлены проверки портов, доменов и индексов меню
 - Централизован ввод пользователя и добавлены лимиты длины для чувствительных значений
@@ -302,7 +316,11 @@ Host: your_server_ip   Port: 1081   Type: HTTP
 - `umask 077`, `chmod 600/700`, and helpers for secret configs, exports, migrations, and WARP profiles
 - Strict validation for ports, menu indexes, and domains before Docker/firewall operations
 - Centralized bounded input helpers for menu choices, tokens, IDs, passwords, and WARP keys
-- Xray SOCKS5 no longer creates a public open proxy by default
+- Xray SOCKS5/HTTP no longer creates a public open proxy; authentication is mandatory
+- Python sales bot enforces SSH known_hosts checking instead of trusting unknown host keys
+- Remote bot commands validate and quote dynamic container names, client names, ports, and domains
+- MTProxy Fake TLS secrets are generated through `mtg generate-secret --hex`
+- Bot Telegram HTML responses escape links, QR text, and dynamic values
 - Sensitive Xray JSON configs are not printed to the terminal when validation fails
 - Telegram bot daemon mode is fixed for systemd and avoids duplicate polling processes
 - Self-update validates downloaded scripts with `bash -n` before replacing `/usr/local/bin/mtproxy`

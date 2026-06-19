@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================================
-#  Messenger Proxy Manager v5.0
+#  Messenger Proxy Manager v5.2
 #  Telegram MTProxy (Fake TLS) + Xray SOCKS5 (WhatsApp/universal)
-#  GitHub: https://github.com/ivanstudiya-cpu/mtproxy
+#  GitHub: https://github.com/ivan-yurich/mtproxy
 # ============================================================
 
 set -o pipefail
@@ -16,8 +16,8 @@ CONFIG_DIR="/etc/mtproxy"
 CONFIG_FILE="$CONFIG_DIR/proxies.conf"
 EXPORT_FILE="$CONFIG_DIR/export_links.txt"
 CRON_TAG="# mtproxy-auto"
-GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/mtproxy/main/mtproxy.sh"
-VERSION="5.0"
+GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/mtproxy/main/mtproxy.sh"
+VERSION="5.2"
 WARP_DIR="$CONFIG_DIR/warp"
 WARP_XRAY_DIR="$CONFIG_DIR/xray-warp"
 WARP_CONF="$CONFIG_DIR/warp.conf"
@@ -56,7 +56,7 @@ banner() {
     echo -e "${M}"
     cat << 'EOF'
   ╔══════════════════════════════════════════════════════╗
-  ║     Messenger Proxy Manager v5.0                    ║
+  ║     Messenger Proxy Manager v5.2                    ║
   ║     Telegram MTProxy + Xray SOCKS5                  ║
   ╚══════════════════════════════════════════════════════╝
 EOF
@@ -1454,41 +1454,22 @@ xray_install() {
     done
     info "HTTP прокси (WhatsApp): порт $XRAY_HTTP_PORT"
 
-    # Авторизация
-    echo -e "\n${C}Защита паролем:${NC}"
-    echo "  1) С логином и паролем (рекомендуется)"
-    echo "  2) Без пароля (опасно: публичный open proxy)"
-    read_choice "  Выбор [1-2]: " xa "1 2" || xa=1
-
     local XRAY_USER="" XRAY_PASS="" XRAY_AUTH_TYPE="password"
-    if [[ "$xa" == "2" ]]; then
-        warn "Открытый SOCKS5/HTTP прокси будет доступен всем, кто найдёт порт."
-        read_bounded "  Напиши OPEN чтобы подтвердить: " open_confirm 16 || open_confirm=""
-        if [[ "$open_confirm" == "OPEN" ]]; then
-            XRAY_AUTH_TYPE="noauth"
-            info "Открытый доступ (без пароля)"
-        else
-            warn "Подтверждение не введено, включаю пароль."
-            xa="1"
-        fi
-    fi
-
-    if [[ "$XRAY_AUTH_TYPE" == "password" ]]; then
-        read_bounded "  Логин [proxy]: " XRAY_USER 64 || XRAY_USER="proxy"
-        XRAY_USER="${XRAY_USER:-proxy}"
-        XRAY_USER="${XRAY_USER//[^a-zA-Z0-9_.-]/}"
-        XRAY_USER="${XRAY_USER:-proxy}"
-        read_secret_bounded "  Пароль (Enter = сгенерировать): " XRAY_PASS 64 || XRAY_PASS=""
-        XRAY_PASS="${XRAY_PASS//[^a-zA-Z0-9_.-]/}"
-        [[ -z "$XRAY_PASS" ]] && XRAY_PASS="$(random_password)"
-        XRAY_AUTH_TYPE="password"
-        info "Авторизация включена: $XRAY_USER"
-    fi
+    echo -e "\n${C}Авторизация SOCKS5/HTTP:${NC}"
+    info "Логин и пароль обязательны: публичный open proxy отключён."
+    read_bounded "  Логин [proxy]: " XRAY_USER 64 || XRAY_USER="proxy"
+    XRAY_USER="${XRAY_USER:-proxy}"
+    XRAY_USER="${XRAY_USER//[^a-zA-Z0-9_.-]/}"
+    XRAY_USER="${XRAY_USER:-proxy}"
+    read_secret_bounded "  Пароль (Enter = сгенерировать): " XRAY_PASS 64 || XRAY_PASS=""
+    XRAY_PASS="${XRAY_PASS//[^a-zA-Z0-9_.-]/}"
+    [[ -z "$XRAY_PASS" ]] && XRAY_PASS="$(random_password)"
+    XRAY_AUTH_TYPE="password"
+    info "Авторизация включена: $XRAY_USER"
 
     # Генерируем конфиг раздельно чтобы не было проблем с кавычками в JSON
     mkdir -p "$XRAY_DIR"
-    if [[ "$XRAY_AUTH_TYPE" == "password" ]]; then
-        cat > "$XRAY_DIR/config.json" << XCONF
+    cat > "$XRAY_DIR/config.json" << XCONF
 {
   "log": {"loglevel": "warning"},
   "dns": {"servers": ["8.8.8.8", "1.1.1.1", "8.8.4.4"]},
@@ -1524,42 +1505,6 @@ xray_install() {
   ]
 }
 XCONF
-    else
-        cat > "$XRAY_DIR/config.json" << XCONF
-{
-  "log": {"loglevel": "warning"},
-  "dns": {"servers": ["8.8.8.8", "1.1.1.1", "8.8.4.4"]},
-  "inbounds": [
-    {
-      "port": $XRAY_PORT,
-      "listen": "0.0.0.0",
-      "protocol": "socks",
-      "tag": "socks-in",
-      "settings": {
-        "auth": "noauth",
-        "udp": true,
-        "ip": "0.0.0.0"
-      }
-    },
-    {
-      "port": $XRAY_HTTP_PORT,
-      "listen": "0.0.0.0",
-      "protocol": "http",
-      "tag": "http-in",
-      "settings": {
-        "allowTransparent": true
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {"domainStrategy": "UseIP"}
-    }
-  ]
-}
-XCONF
-    fi
     secure_file "$XRAY_DIR/config.json"
 
     # Проверяем JSON
